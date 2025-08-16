@@ -29,18 +29,22 @@ A music player inside neovim that uses [mpv](https://github.com/mpv-player/mpv).
 
 - Keymaps:
 
-|     key      | action             |
-| :----------: | ------------------ |
-| `1, 2, 3...` | play song by index |
+|     key      | action                                                             |
+| :----------: | ------------------------------------------------------------------ |
+| `1, 2, 3...` | play song by index                                                 |
+|   `<Esc>`    | close the panel                                                    |
+|  `<Space>`   | play/pause                                                         |
+|     `m`      | toggle mode ("once", "repeat", "playlist_once", "playlist_repeat") |
 
 ### Features
 
+- play/pause music
+- change playback mode
 - search by keyword.
 
 ### Todo's
 
 - [ ] add playlist support
-- [ ] add mode support (e.g. shuffle, repeat)
 
 ### Inspiration/Credits
 
