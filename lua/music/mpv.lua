@@ -3,31 +3,21 @@ local a = require("plenary.async")
 
 local M = {
 	tx = nil,
+	---@type fun(msg: music.backend.msg): nil
+	update = nil,
 }
 _G.plugin_music = _G.plugin_music
-		or {
-			_mpv = {
-				skt = nil,
-				rid = 0,
-				rcbs = {},
-				oid = 0,
-				ocbs = {},
-				obed = {},
-				tx = nil,
-			},
-		}
-
-local function notify(msg, level)
-	---@param notif snacks.notp sifier.Notif
-	local function keep(notif)
-		notif.timeout = 20000 -- 5 seconds
-		return false
-	end
-	vim.notify(msg, level or vim.log.levels.INFO, {
-		--@type fun(notif: snacks.notifier.Notif): boolean
-		keep = keep,
-	})
-end
+	or {
+		_mpv = {
+			skt = nil,
+			rid = 0,
+			rcbs = {},
+			oid = 0,
+			ocbs = {},
+			obed = {},
+			tx = nil,
+		},
+	}
 
 local mpv = _G.plugin_music._mpv
 
@@ -43,7 +33,6 @@ end
 ---@param cb? fun(response: { error: string }): nil
 ---@return nil
 function mpv.req(cmd, cb)
-	-- vim.notify("Sending command: " .. vim.inspect(cmd) .. " ID: " .. tostring(M.id), vim.log.levels.DEBUG)
 	mpv.rid = mpv.rid + 1
 	local j = vim.json.encode({
 		command = cmd,
@@ -51,7 +40,12 @@ function mpv.req(cmd, cb)
 		async = true,
 	})
 	mpv.rcbs[mpv.rid] = cb
-	mpv.skt:write(j .. "\n")
+	mpv.skt:write(j .. "\n", function(err)
+		if err then
+			vim.notify("Error sending command to MPV: " .. err, vim.log.levels.ERROR)
+			mpv.rcbs[mpv.rid] = nil
+		end
+	end)
 end
 
 function mpv.observe(cmd, cb)
@@ -228,30 +222,17 @@ function M.start()
 end
 
 ---@param name string
----@param m? nil|fun(data: any): nil
+---@param m fun(data: any): music.backend.msg
 local function o_api(name, m)
-	m = m or function(value)
-		return value
-	end
-
-	return function(cb)
-		return M.tx({ "observe", name }, cb and function(data)
-			cb(m(data))
-		end or function(_)
-			vim.notify("No callback provided for " .. name, vim.log.levels.WARN)
+	return function()
+		return M.tx({ "observe", name }, function(data)
+			M.update(m(data))
 		end)
 	end
 end
 
-local function tfmt(seconds)
-	seconds = seconds or 0.00
-	local minutes = math.floor(seconds / 60)
-	local sec = seconds - minutes * 60
-	return string.format("%d:%.1f", minutes, sec)
-end
-
 local opps = {
-	pause = o_api("pause", function(paused)
+	paused = o_api("pause", function(paused)
 		return { paused = paused }
 	end),
 	metadata = o_api("metadata", function(data)
@@ -259,71 +240,79 @@ local opps = {
 	end),
 	total_time = o_api("duration", function(seconds)
 		return {
-			total_time = tfmt(seconds),
+			total_time = seconds,
+		}
+	end),
+	playlist = o_api("playlist", function(data)
+		return {
+			playlist = data,
 		}
 	end),
 }
 
 ---@param property string
----@param callback fun(data: string): nil
-function M.observe(property, callback)
+function M.observe(property)
 	local o = opps[property]
 	if not o then
 		vim.notify("Unknown property: " .. property, vim.log.levels.ERROR)
 		return false
 	end
-	M.tx(o(callback))
+	M.tx(o())
 end
 
 ---@param cmd string|table
----@param c? nil|fun(cmd: table,...): nil
----@param m? nil|fun(data: any): nil
-local function e_api(cmd, c, m)
-	if type(cmd) == "string" then
+---@param m? fun(data: any):music.backend.msg
+local function e_api(cmd, m)
+	local function f(cb, c, ...)
+		if ... then
+			c = vim.list_extend(vim.deepcopy(c), { ... })
+		end
+		M.tx(c, cb)
+	end
+	if m then
+		cmd = { "get_property", cmd }
+		return function(...)
+			f(function(e)
+				if e.error == "property unavailable" then
+					return
+				elseif not check_response(e) then
+					return
+				end
+				M.update(m(e.data))
+			end, cmd, ...)
+		end
+	elseif type(cmd) == "string" then
 		cmd = { cmd }
 	end
-	c = c or function(ctbl, ...)
-		return vim.list_extend(ctbl, { ... })
-	end
-	m = m or function(value)
-		return value
-	end
-	return function(cb, ...)
-		M.tx(c(vim.deepcopy(cmd), ...), cb and function(e)
-			if e.error == "property unavailable" then
-				return
-			elseif not check_response(e) then
-				return
-			end
-			cb(m(e.data))
-		end or function(e)
-			check_response(e)
-		end)
+	return function(...)
+		f(check_response, cmd, ...)
 	end
 end
 
 local epps = {
-	metadata = e_api({ "get_property", "metadata" }, nil, function(data)
+	metadata = e_api("metadata", function(data)
 		return data or {}
 	end),
-	playing_time = e_api({ "get_property", "time-pos" }, nil, function(seconds)
+	playing_time = e_api("time-pos", function(seconds)
 		return {
-			playing_time = tfmt(seconds),
+			playing_time = seconds,
 		}
 	end),
-	total_time = e_api({ "get_property", "duration" }, nil, function(seconds)
+	total_time = e_api("duration", function(seconds)
 		return {
-			total_time = tfmt(seconds),
+			total_time = seconds,
 		}
 	end),
-	pause = e_api({ "get_property", "pause" }, nil, function(paused)
+	paused = e_api("pause", function(paused)
 		return { paused = paused }
 	end),
-	toggle = e_api({ "cycle", "pause" }),
-	play = e_api({ "loadfile", "replace" }, function(cmd, ...)
-		table.insert(cmd, 2, (...))
-		return cmd
+	playlist = e_api("playlist", function(data)
+		return {
+			playlist = data,
+		}
 	end),
+	toggle = e_api({ "cycle", "pause" }),
+	play = e_api("loadfile"),
 	quit = e_api("quit"),
 	set = e_api("set_property"),
 }
@@ -336,22 +325,21 @@ local modes = {
 }
 
 ---@param cmd string
----@param callback? fun(data: string): nil
-function M.exec(cmd, callback, ...)
+function M.exec(cmd, ...)
 	if cmd == "quit" and not mpv.job then
 		return
 	end
 	if cmd == "mode" then
 		local m = modes[(...)]
-		epps.set(nil, "loop-file", m[1])
-		epps.set(nil, "loop-playlist", m[2])
+		epps.set("loop-file", m[1])
+		epps.set("loop-playlist", m[2])
 		return
 	end
 	local e = epps[cmd]
 	if not e then
 		vim.notify("Unknown command: " .. cmd, vim.log.levels.ERROR)
 	end
-	e(callback, ...)
+	e(...)
 end
 
 return M

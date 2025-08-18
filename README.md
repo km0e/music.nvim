@@ -10,14 +10,36 @@ A music player inside neovim that uses [mpv](https://github.com/mpv-player/mpv).
 
 ### Installation and Configuration
 
+Default configuration looks like this:
+
 ```lua
 -- Using lazy.nvim:
 {
   "km0e/music.nvim",
   opts = {
-    u = "user",
-    p = "password",
-    url = "subsonic api url",
+    u = nil, -- username for subsonic server
+    p = nil, -- password for subsonic server
+    url = nil, -- url for subsonic server
+    win = {
+      -- see https://github.com/folke/snacks.nvim/blob/main/docs/win.md#%EF%B8%8F-config
+      backdrop = false,
+			height = 0.8,
+			width = or 0.8,
+			border = "rounded",
+			title = "Music Panel",
+			title_pos = "center",
+    }
+    keys = {
+      close = "<Esc>", -- key to close the panel
+      toggle = "<Space>", -- key to toggle play/pause
+      search = { "<CR>", "s" }, -- key to search by keyword
+      panel = ";", -- key to open the panel
+      mode = "m", -- key to toggle playback mode
+      prev_search = "k", -- key to go to previous search result
+      next_search = "j", -- key to go to next search result
+      append = "a", -- key to append song to playlist
+      replace = "r", -- key to replace current playlist with song
+    },
   }
 }
 ```
@@ -29,22 +51,33 @@ A music player inside neovim that uses [mpv](https://github.com/mpv-player/mpv).
 
 - Keymaps:
 
-|     key      | action                                                             |
-| :----------: | ------------------------------------------------------------------ |
-| `1, 2, 3...` | play song by index                                                 |
-|   `<Esc>`    | close the panel                                                    |
-|  `<Space>`   | play/pause                                                         |
-|     `m`      | toggle mode ("once", "repeat", "playlist_once", "playlist_repeat") |
+Except for the keys defined in the configuration, the following keymaps are available in the music panel:
+
+|  key  | action                                                                 |
+| :---: | ---------------------------------------------------------------------- |
+| `N a` | append to playlist (N is the number of the song)                       |
+| `N r` | replace current whole playlist with song (N is the number of the song) |
+
+- Auto commands:
+
+|      event      | action                                                              |
+| :-------------: | ------------------------------------------------------------------- |
+|  `InsertEnter`  | close the panel if it is open (to avoid conflicts with insert mode) |
+| `InsertCharPre` | always search for the input character with about 500ms delay        |
 
 ### Features
 
 - play/pause music
 - change playback mode
 - search by keyword.
+- navigate through search results
+- append or replace current playlist with a song
+- display current playlist
 
 ### Todo's
 
-- [ ] add playlist support
+- [ ] subsonic playlist
+- [ ] modify playlist(low priority)
 
 ### Inspiration/Credits
 
