@@ -1,16 +1,16 @@
 ---@class music.ui.state
----@field search? music.backend.song[] 搜索结果列表
----@field soffset? number 搜索结果偏移量
----@field paused? boolean 是否暂停
+---@field search? music.backend.song[] all search results
+---@field soffset? number select search offset
+---@field paused? boolean is the player paused
 ---@field mode? "once" | "loop" | "pl" | "pl_loop"
----@field title? string 当前歌曲标题
----@field artist? string 当前歌曲艺术家
----@field album? string 当前歌曲专辑
----@field total_time? number 当前歌曲总时长
----@field playing_time? number 当前歌曲播放时长
----@field playlist? music.backend.song[] 当前播放列表
----@field playing? number 当前播放的歌曲索引
----@field ploffset? number 播放列表偏移量
+---@field title? string the current song title
+---@field artist? string the current song artist
+---@field album? string the current song album
+---@field total_time? number the total time of the current song
+---@field playing_time? number the current playing time of the song
+---@field playlist? music.backend.song[]  the current playlist
+---@field playing? number the index of the currently playing song in the playlist
+---@field ploffset? number the offset of the playlist, used for pagination
 ---
 ---
 ---@class music.ui.key
@@ -141,6 +141,10 @@ local actions = {
 		end
 	end,
 	select = function()
+		if M.mode == "select" then
+			return
+		end
+		M.components.panel:clear(M.p, M.ns_id)
 		M.mode = "select"
 		M:render()
 	end,
@@ -148,6 +152,7 @@ local actions = {
 		if M.mode == "panel" then
 			return
 		end
+		M.components.select:clear(M.p, M.ns_id)
 		M.mode = "panel"
 		M:render()
 	end,

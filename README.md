@@ -49,6 +49,10 @@ Default configuration looks like this:
 }
 ```
 
+### Showcase
+
+https://github.com/user-attachments/assets/7b3fa82e-1ff2-401c-9f0e-a59e0ec92635
+
 ### Usage
 
 - The command: `:Music`
@@ -82,6 +86,7 @@ Except for the keys defined in the configuration, the following keymaps are avai
 ### Todo's
 
 - [ ] subsonic playlist
+- [ ] switch song in playlist
 - [ ] modify playlist(low priority)
 
 ### Inspiration/Credits

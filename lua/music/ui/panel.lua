@@ -94,7 +94,7 @@ local function render_playlist(win, ns_id, state, row_end, width)
 				{ song.album or "",      style },
 				{ string.rep(" ", arp2), "Normal" },
 			},
-			virt_text_pos = "overlay", -- 整行渲染
+			virt_text_pos = "overlay", --
 			hl_mode = "combine",
 			id = M.em[i],
 		})
@@ -141,7 +141,7 @@ function M:render(win, ns_id, state)
 			{ " ",  "Normal" },
 			{ text, "String" },
 		},
-		virt_text_pos = "overlay", -- 整行渲染
+		virt_text_pos = "overlay", --
 		hl_mode = "combine",
 		id = self.emt,
 	})
@@ -161,10 +161,22 @@ function M:render(win, ns_id, state)
 			{ string.rep(" ", rpadding), "Normal" },
 			{ mode,                      "String" },
 		},
-		virt_text_pos = "overlay", -- 整行渲染
+		virt_text_pos = "overlay", --
 		hl_mode = "combine",
 		id = self.ems,
 	})
+end
+
+function M:clear(win, ns_id)
+	for _, em in pairs(self.em) do
+		vim.api.nvim_buf_del_extmark(win.buf, ns_id, em)
+	end
+	if self.emt then
+		vim.api.nvim_buf_del_extmark(win.buf, ns_id, self.emt)
+	end
+	if self.ems then
+		vim.api.nvim_buf_del_extmark(win.buf, ns_id, self.ems)
+	end
 end
 
 return M
