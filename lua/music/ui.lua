@@ -189,7 +189,7 @@ function M:setup_keys(keys)
 		["prev_search"] = "k",
 	}
 
-	keys = vim.tbl_deep_extend("force", default, keys or {})
+	keys = vim.tbl_deep_extend("force", default, keys)
 	local skeys = {}
 	local function snack_keys(key, action, mode)
 		if actions[action] then
@@ -220,13 +220,12 @@ function M:setup_keys(keys)
 	return skeys
 end
 
----@param opts {keys?: music.ui.keys, win?: snacks.win.Config}
 function M.setup(opts)
 	opts = opts or {}
 
 	M.search = Snacks.win.new({
 		show = false,
-		keys = M:setup_keys(opts.keys),
+		keys = M:setup_keys(opts.keys or {}),
 	})
 	M.p = Snacks.win.new({
 		show = false,
@@ -248,7 +247,7 @@ function M.setup(opts)
 			border = "top",
 		},
 	}
-	lo = vim.tbl_deep_extend("force", lo, opts.win)
+	lo = vim.tbl_deep_extend("force", lo, opts.win or {})
 
 	M.layout = Snacks.layout.new({
 		show = false,
@@ -295,7 +294,7 @@ function M.setup(opts)
 
 	M.ns_id = vim.api.nvim_create_namespace("PluginMusicUI")
 
-	vim.api.nvim_create_user_command("Music2", function()
+	vim.api.nvim_create_user_command("Music", function()
 		M:start()
 	end, { desc = "Open the music panel" })
 end

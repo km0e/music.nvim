@@ -45,7 +45,9 @@ local cfg = {
 		f = "json",
 		v = nil,
 		u = nil,
-		p = "",
+		p = nil, -- password, optional
+		t = nil, -- token, optional
+		s = nil, -- salt, optional
 	},
 }
 
@@ -113,6 +115,15 @@ local function get(id)
 	return parse_song(resp.song)
 end
 
+---@class music.backend.config
+---@field url string
+---@field u string
+---@field p string|nil
+---@field v string
+---@field t string|nil
+---@field s string|nil
+
+---@param opts music.backend.config
 function M.setup(opts)
 	opts = opts or {}
 	if not field_check(opts, "url", "u", "p") then
@@ -121,13 +132,21 @@ function M.setup(opts)
 	cfg.url = opts.url
 	cfg.query.v = opts.v or "1.12.0"
 	cfg.query.u = opts.u
-	cfg.query.p = ""
-
-	for i = 1, #opts.p do
-		cfg.query.p = cfg.query.p .. string.format("%02x", opts.p:byte(i))
+	if opts.t then
+		cfg.query.t = opts.t
+		cfg.query.s = opts.s
+	elseif opts.p then
+		cfg.query.p = ""
+		for i = 1, #opts.p do
+			cfg.query.p = cfg.query.p .. string.format("%02x", opts.p:byte(i))
+		end
+		cfg.query.p = "enc:" .. cfg.query.p
+	else
+		vim.notify("No password or token provided, authentication may fail", vim.log.levels.WARN)
+		cfg.query.p = nil
+		cfg.query.t = nil
+		cfg.query.s = nil
 	end
-	cfg.query.p = "enc:" .. cfg.query.p
-
 	local augid = vim.api.nvim_create_augroup("PluginMusicBackend", { clear = true })
 	vim.api.nvim_create_autocmd("VimLeavePre", {
 		group = augid,

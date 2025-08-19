@@ -17,9 +17,14 @@ Default configuration looks like this:
 {
   "km0e/music.nvim",
   opts = {
-    u = nil, -- username for subsonic server
-    p = nil, -- password for subsonic server
-    url = nil, -- url for subsonic server
+    user = {
+      u = nil, -- username for subsonic server
+      url = nil, -- url for subsonic server
+      p = nil, -- password for subsonic server
+      t = nil, -- token for subsonic server (optional, if you don't want to use password)
+      s = nil, -- salt for subsonic server (optional, if you don't want to use password)
+      -- see https://www.subsonic.org/pages/api.jsp Authentication section for more details
+    }
     win = {
       -- see https://github.com/folke/snacks.nvim/blob/main/docs/win.md#%EF%B8%8F-config
       backdrop = false,
