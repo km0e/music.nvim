@@ -1,297 +1,426 @@
----@class music.backend
----@field setup fun(opts: {url: string, u: string, p: string, v?: string}): nil
----@field lazy_setup fun(): nil
----@field play fun(song_id: string, append?: boolean): nil
----@field toggle fun(): nil
----@field search fun(name: string, offset: number, count: number): nil
----@field mode fun(mode: string): nil
----@field render fun(msg: music.backend.msg): nil
-local M = {
-	---@type fun(msg: music.backend.msg): nil
-	render = nil,
-}
-
----@class music.backend.song
----@field id string
----@field title string
----@field artist? string
----@field album? string
-
-local function parse_song(song)
-	return {
-		id = song.id,
-		title = song.title,
-		artist = song.artist or "Unknown Artist",
-		album = song.album or "Unknown Album",
-	}
-end
-
----
----@class music.backend.title_cache
----@field [string] music.backend.song[]
-local tcache = {}
-
----@class music.backend.id_cache
----@field [string] music.backend.song
-local icache = {}
-
-local mpv = require("music.mpv")
-local su = require("snacks.util")
-
-local cfg = {
-	url = nil,
-	query = {
-		c = "music.nvim",
-		f = "json",
-		v = nil,
-		u = nil,
-		p = nil, -- password, optional
-		t = nil, -- token, optional
-		s = nil, -- salt, optional
-	},
-}
-
----@class music.backend.msg:{}
----@field album? string
----@field artist? string
+---@class music.backend.mpv.playlist_item
+---@field filename string
+---@field current? boolean
+---@field playing boolean
 ---@field title? string
----@field paused? boolean
----@field total_time? number
----@field playing_time? number
----@field playlist? table
----@field playing? number
+---@field id integer
+---
+---@class music.backend.mpv.response
+---@field error string
+---@field data any
+---@field request_id? integer
+---
+---@class music.backend.mpv.event
+---@field event string
+---@field data any
+---@field id integer
+---@field name string
+---
+---@class music.backend.observer
+---@field playing fun(id: string)
+---@field playlist fun(list: string[])
+---@field pause fun(pause: boolean)
+---@field playing_time fun(seconds: number)
+---@field total_time fun(seconds: number)
+---@field mode fun(mode: string)
 
-local function field_check(data, ...)
-	for _, field in ipairs({ ... }) do
-		if not data[field] then
-			vim.notify("Missing field: " .. field, vim.log.levels.ERROR)
-			return false
+_G.plugin_music = _G.plugin_music
+	or {
+		_mpv = {
+			---@type uv.uv_pipe_t |nil
+			skt = nil,
+			rid = 0,
+			rcbs = {},
+			---@type table<string, fun(data: any): nil>
+			ocbs = {},
+			---@class plenary.async.control.mpsc
+			---@field send fun(data: any): nil
+			tx = nil,
+		},
+	}
+
+local mpv = _G.plugin_music._mpv
+
+---@class music.backend
+---@field observer music.backend.observer
+---@field setup fun(self: music.backend, observer?: music.backend.observer)
+---@field lazy_setup fun(self: music.backend)
+---@field toggle fun(self: music.backend)
+---@field load fun(self: music.backend, url: string, opts?: {append: boolean,play: boolean})
+---@field trigger fun(self: music.backend, ...: "playing" | "pause" | "playlist" | "playing_time" | "total_time")
+---@field next fun(self: music.backend)
+---@field prev fun(self: music.backend)
+---@field quit fun(self: music.backend)
+local M = {
+	---@diagnostic disable-next-line: missing-fields
+	observer = {},
+}
+
+local uv = vim.uv
+local a = require("plenary.async")
+local u = require("music.util")
+
+local playing = ""
+local playlist = {}
+
+local loop_file = false
+local loop_playlist = false
+
+---@type table<string, fun(data: any)>
+local mpv_observer = {
+	playlist = function(data)
+		---@type music.backend.mpv.playlist_item[]
+		data = data or {}
+		local lp, chg = nil, false
+		for i, item in ipairs(data) do
+			local id = item.filename:match("[?&]id=([^&]+)")
+			if item.playing then
+				lp = id
+			end
+			if playlist[i] ~= id then
+				playlist[i] = id
+				chg = true
+			end
 		end
-	end
-	return true
-end
-
----@param endpoint string
----@param q table
----@return table|nil
-local function query(endpoint, q)
-	local curl = require("plenary.curl")
-	local url = cfg.url .. "/rest/" .. endpoint .. ".view"
-	q = vim.tbl_deep_extend("force", cfg.query, q)
-	local response = curl.get(url, { query = q })
-	if response.status ~= 200 then
-		vim.notify("Failed to query " .. endpoint .. ": " .. response.status, vim.log.levels.ERROR)
-		return nil
-	end
-	local data = vim.json.decode(response.body)
-	if not data then
-		vim.notify("Failed to parse response for " .. endpoint, vim.log.levels.ERROR)
-		return nil
-	end
-	if not field_check(data, "subsonic-response") then
-		return nil
-	end
-	local resp = data["subsonic-response"]
-	if not field_check(resp, "status") then
-		return nil
-	end
-	if resp.status ~= "ok" then
-		vim.notify("Query failed: " .. resp.status, vim.log.levels.ERROR)
-		return nil
-	end
-	return resp
-end
-
----@param id string
----@return music.backend.song|nil
-local function get(id)
-	local resp = query("getSong", { id = id })
-	if not resp then
-		return nil
-	end
-	if not field_check(resp, "song") then
-		return nil
-	end
-	return parse_song(resp.song)
-end
-
----@class music.backend.config
----@field url string
----@field u string
----@field p string|nil
----@field v string
----@field t string|nil
----@field s string|nil
-
----@param opts music.backend.config
-function M.setup(opts)
-	opts = opts or {}
-	if not field_check(opts, "url", "u", "p") then
-		return
-	end
-	cfg.url = opts.url
-	cfg.query.v = opts.v or "1.12.0"
-	cfg.query.u = opts.u
-	if opts.t then
-		cfg.query.t = opts.t
-		cfg.query.s = opts.s
-	elseif opts.p then
-		cfg.query.p = ""
-		for i = 1, #opts.p do
-			cfg.query.p = cfg.query.p .. string.format("%02x", opts.p:byte(i))
+		if chg and M.observer.playlist then
+			M.observer.playlist(playlist)
 		end
-		cfg.query.p = "enc:" .. cfg.query.p
-	else
-		vim.notify("No password or token provided, authentication may fail", vim.log.levels.WARN)
-		cfg.query.p = nil
-		cfg.query.t = nil
-		cfg.query.s = nil
+		if M.observer.playing then
+			playing = lp or ""
+			M.observer.playing(playing)
+		end
+	end,
+	pause = function(pause)
+		if not M.observer.pause then
+			return
+		end
+		M.observer.pause(pause or false)
+	end,
+	duration = function(seconds)
+		if not M.observer.total_time then
+			return
+		end
+		M.observer.total_time(seconds or 0)
+	end,
+	["loop-file"] = function(data)
+		if data == "inf" then
+			M.observer.mode("loop")
+		elseif data == false then
+			if loop_playlist == "inf" then
+				M.observer.mode("pl_loop")
+			else
+				M.observer.mode("pl")
+			end
+		elseif type(loop_file) ~= "number" then
+			M.observer.mode("pl")
+		end
+		loop_file = data
+	end,
+	["loop-playlist"] = function(data)
+		if loop_file ~= false then
+			loop_playlist = data
+			return
+		elseif data == false then
+			M.observer.mode("pl")
+		elseif type(loop_playlist) == "boolean" then
+			M.observer.mode("pl_loop")
+		end
+		loop_playlist = data
+	end,
+}
+
+---@param cmd string | table
+function M.exec(cmd)
+	if type(cmd) == "string" then
+		cmd = { cmd }
 	end
-	local augid = vim.api.nvim_create_augroup("PluginMusicBackend", { clear = true })
-	vim.api.nvim_create_autocmd("VimLeavePre", {
-		group = augid,
-		callback = function()
-			mpv.exec("quit")
+	mpv.tx.send({
+		cmd = cmd,
+		cb = function(response)
+			if response.error ~= "success" then
+				vim.notify(
+					"MPV command " .. vim.inspect(cmd) .. " failed: " .. vim.inspect(response),
+					vim.log.levels.ERROR
+				)
+			end
 		end,
 	})
+end
 
-	mpv.setup()
+local mpv_get = {
+	playing_time = "time-pos",
+}
 
-	mpv.observe("metadata")
-	mpv.observe("paused")
-	mpv.observe("total_time")
-	mpv.observe("playlist")
+---@param property string
+function M:get(property)
+	local ocb = mpv_observer[property]
+	if not ocb and mpv_get[property] then
+		ocb = self.observer[property]
+		property = mpv_get[property]
+	elseif not ocb then
+		vim.notify("No observer for property: " .. property, vim.log.levels.WARN)
+		return
+	end
+	local cmd = { "get_property", property }
+	local cb = function(response)
+		if response.error == "property unavailable" then
+			return
+		end
+		if response.error ~= "success" then
+			vim.notify("MPV command " .. vim.inspect(cmd) .. " failed: " .. vim.inspect(response), vim.log.levels.ERROR)
+			return
+		end
+		ocb(response.data)
+	end
+	mpv.tx.send({
+		cmd = cmd,
+		cb = cb,
+	})
+end
 
-	vim.uv.new_timer():start(100, 100, function()
-		mpv.exec("playing_time")
+---@param cmd table
+---@param cb? fun(response: { error: string }): nil
+---@return nil
+function mpv.req(cmd, cb)
+	mpv.rid = mpv.rid + 1
+	local j = vim.json.encode({
+		command = cmd,
+		request_id = mpv.rid,
+		async = true,
+	})
+	mpv.rcbs[mpv.rid] = cb
+	mpv.skt:write(j .. "\n", function(err)
+		if err then
+			vim.notify("Error sending command to MPV: " .. err, vim.log.levels.ERROR)
+			mpv.rcbs[mpv.rid] = nil
+		end
 	end)
+end
 
-	mpv.update = function(msg)
-		if msg.playlist then
-			vim.schedule(function() -- NOTE: This is scheduled to avoid blocking the exec loop.
-				for i, song in ipairs(msg.playlist) do
-					local id = song.filename:match("[?&]id=([^&]+)")
-					if not id then
-						vim.notify("Song without id in playlist: " .. song.filename, vim.log.levels.WARN)
-						return
-					end
-					if not icache[id] then
-						icache[id] = get(id)
-					end
-					if song.playing then
-						msg.playing = i
-					end
-					msg.playlist[i] = icache[id]
-				end
-				M.render(msg)
-			end)
+local function after_connect()
+	local buffer = ""
+	local function handle_response(err, chunk)
+		if err then
+			vim.notify("Error reading from MPV socket: " .. err, vim.log.levels.ERROR)
+			return
 		end
-		M.render(msg or {})
-	end
-end
-
-function M.lazy_setup()
-	mpv.start()
-	mpv.exec("metadata")
-	mpv.exec("paused")
-	mpv.exec("total_time")
-	mpv.exec("playlist")
-end
-
----@param name string
----@param offset number
----@param count number
----@return music.backend.song[]|nil
-local function search(name, offset, count)
-	local resp = query("search3", {
-		query = name,
-		songOffset = offset,
-		songCount = count,
-		artistCount = 0,
-		albumCount = 0,
-	})
-	if not resp then
-		return nil
-	end
-	if not field_check(resp, "searchResult3") then
-		return nil
-	end
-	local songs = {}
-	for i, s in ipairs(resp.searchResult3.song or {}) do
-		songs[i] = parse_song(s)
-	end
-	return songs
-end
-
-local function kv_to_str(kv)
-	local F = require("plenary.functional")
-	local function url_encode(str)
-		if type(str) ~= "number" then
-			str = str:gsub("\r?\n", "\r\n")
-			str = str:gsub("([^%w%-%.%_%~ ])", function(c)
-				return string.format("%%%02X", c:byte())
-			end)
-			str = str:gsub(" ", "+")
-			return str
-		else
-			return str
+		buffer = buffer .. (chunk or "")
+		while true do
+			local line, rest = buffer:match("([^\n]*)\n(.*)")
+			if not line then
+				break
+			end
+			buffer = rest
+			if line ~= "" then
+				local msg = vim.json.decode(line)
+				mpv.tx.send(msg)
+			end
 		end
 	end
-	return F.join(
-		F.kv_map(function(kvp)
-			return kvp[1] .. "=" .. url_encode(kvp[2])
-		end, kv),
-		"&"
-	)
-end
 
-function M.play(song_id, append)
-	local url = cfg.url .. "/rest/stream.view"
-	local q = vim.tbl_deep_extend("force", cfg.query, {
-		id = song_id,
-	})
-	local full_url = url .. "?" .. kv_to_str(q)
-	mpv.exec("play", full_url, append and "append" or "replace")
+	mpv.skt:read_start(handle_response)
+	local oid = 0
+	for prop, cb in pairs(mpv_observer) do
+		mpv.req({ "observe_property", oid, prop }, function(response)
+			if response.error ~= "success" then
+				u.notify("Failed to observe property " .. prop .. ": " .. vim.inspect(response), vim.log.levels.ERROR)
+				return
+			end
+			mpv.ocbs[prop] = cb
+		end)
+		oid = oid + 1
+	end
 end
 
 ---@return nil
-function M.toggle()
-	mpv.exec("toggle")
-end
+local function _start()
+	local job = require("plenary.job"):new({
+		command = "mpv",
+		args = { "--idle", "--input-ipc-server=/tmp/neovim-plugin-music-mpv-socket", "--no-terminal", "--no-video" },
+		on_exit = function(_, return_val)
+			mpv.skt = nil
+			if return_val ~= 0 then
+				vim.notify("MPV server exited with code " .. return_val, vim.log.levels.ERROR)
+				_start()
+			end
+			vim.notify("MPV server stopped", vim.log.levels.INFO)
+		end,
+	})
+	job:start()
+	mpv.job = job
 
----@type fun(name: string, offset: number,count: number): nil
-function M.search(name, offset, count)
-	local cache = tcache[name]
-	if not cache or #cache < offset + count then
-		su.debounce(function()
-			local songs = search(name, offset, count)
-			if not songs then
-				return
-			end
-			tcache[name] = cache or {}
-			for i = 1, #songs do
-				tcache[name][offset + i] = songs[i]
-				icache[songs[i].id] = songs[i]
-			end
-			M.render({
-				search = vim.list_slice(tcache[name], offset + 1, offset + count),
-				offset = offset,
-			})
-		end, { ms = 500 })()
+	uv.sleep(500) -- Give MPV some time to start
+
+	local err = a.uv.pipe_connect(mpv.skt, "/tmp/neovim-plugin-music-mpv-socket")
+	if err then
+		vim.notify("Failed to connect to MPV server: " .. err, vim.log.levels.ERROR)
+		mpv.skt:close()
+		mpv.skt = nil
 		return
 	end
-	M.render({
-		search = vim.list_slice(tcache[name], offset + 1, offset + count),
-		offset = offset,
+	after_connect()
+end
+
+local function start()
+	if mpv.skt then
+		return
+	end
+
+	mpv.skt = uv.new_pipe(true)
+	if not mpv.skt then
+		vim.notify("Failed to create socket", vim.log.levels.ERROR)
+		return
+	end
+	if a.uv.fs_stat("/tmp/neovim-plugin-music-mpv-socket") == nil then
+		_start()
+		return
+	end
+	local err = a.uv.pipe_connect(mpv.skt, "/tmp/neovim-plugin-music-mpv-socket")
+	if not err then
+		after_connect()
+		return
+	end
+	err = a.uv.fs_unlink("/tmp/neovim-plugin-music-mpv-socket")
+	if err then
+		vim.notify("Failed to unlink existing MPV socket: " .. err, vim.log.levels.ERROR)
+		mpv.skt:close()
+		mpv.skt = nil
+		return
+	end
+	_start()
+end
+
+local function start_exec_queue()
+	if mpv.tx then
+		return
+	end
+
+	local tx, rx = a.control.channel.mpsc()
+	local function handle()
+		while true do
+			local e = rx.recv()
+			if e.request_id then
+				local cb = mpv.rcbs[e.request_id]
+				if cb then
+					cb(e)
+					mpv.rcbs[e.request_id] = nil
+				else
+					vim.notify("Received response for unknown request ID: " .. e.request_id, vim.log.levels.WARN)
+				end
+			elseif e.id then
+				local cb = mpv.ocbs[e.name]
+				if not cb then
+					vim.notify("Received response for unknown observe ID: " .. e.id, vim.log.levels.WARN)
+				elseif e.data then
+					cb(e.data)
+				end
+			elseif e.cmd then
+				if e.cmd == "start" then
+					start()
+				elseif mpv.skt then
+					mpv.req(e.cmd, e.cb)
+				end
+			end
+		end
+	end
+	a.run(handle)
+	mpv.tx = tx
+end
+
+function M:lazy_setup()
+	mpv.tx.send({
+		cmd = "start",
 	})
 end
 
--- NOTE: This function is used to change the playback mode in MPV.
--- It uses a timer to ensure that the mode change is applied after a short delay for debounce.
-function M.mode(mode)
-	su.debounce(function()
-		mpv.exec("mode", mode)
-	end, { ms = 500 })()
+function M:toggle()
+	self.exec({ "cycle", "pause" })
+end
+
+function M:load(url, opts)
+	if not url or url == "" then
+		u.notify("No URL provided to load", vim.log.levels.WARN)
+		return
+	end
+	opts = opts or {}
+	local flags = "replace"
+	if opts.append then
+		flags = opts.play and "append-play" or "append"
+	end
+	local cmd = {
+		"loadfile",
+		url,
+		flags,
+	}
+	self.exec(cmd)
+end
+
+function M:setup(observer)
+	self.observer = observer or {}
+
+	start_exec_queue()
+end
+
+function M:trigger(...)
+	local args = { ... }
+	local map = {
+		playing = "playlist",
+		pause = "pause",
+		playlist = "playlist",
+		playing_time = "playing_time",
+		total_time = "duration",
+	}
+	---@type table<string, boolean>
+	local gets = {}
+	for _, arg in ipairs(args) do
+		local hint = map[arg]
+		if hint then
+			gets[hint] = true
+		else
+			vim.notify("Unknown trigger: " .. arg, vim.log.levels.WARN)
+		end
+	end
+	for prop, _ in pairs(gets) do
+		self:get(prop)
+	end
+end
+
+function M:next()
+	if #playlist == 0 then
+		return
+	end
+	if playing == "" or playing == playlist[#playlist] then
+		self.exec({ "set_property", "playlist-pos", 0 })
+	else
+		self.exec("playlist_next")
+	end
+end
+
+function M:prev()
+	if #playlist == 0 then
+		return
+	end
+	if playing == playlist[1] then
+		self.exec({ "set_property", "playlist-pos", #playlist - 1 })
+	else
+		self.exec("playlist_prev")
+	end
+end
+
+function M:mode(mode)
+	if mode == "pl" then
+		self.exec({ "set_property", "loop-file", false })
+		self.exec({ "set_property", "loop-playlist", false })
+	elseif mode == "loop" then
+		self.exec({ "set_property", "loop-file", "inf" })
+	elseif mode == "pl_loop" then
+		self.exec({ "set_property", "loop-file", false })
+		self.exec({ "set_property", "loop-file", "inf" })
+	end
+end
+
+function M:quit()
+	self.exec("quit")
 end
 
 return M

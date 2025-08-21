@@ -17,33 +17,37 @@ Default configuration looks like this:
 {
   "km0e/music.nvim",
   opts = {
-    user = {
-      u = nil, -- username for subsonic server
-      url = nil, -- url for subsonic server
-      p = nil, -- password for subsonic server
-      t = nil, -- token for subsonic server (optional, if you don't want to use password)
-      s = nil, -- salt for subsonic server (optional, if you don't want to use password)
-      -- see https://www.subsonic.org/pages/api.jsp Authentication section for more details
+    source = {
+      subsonic = {
+        u = nil, -- username for subsonic server
+        url = nil, -- url for subsonic server
+        p = nil, -- password for subsonic server
+        t = nil, -- token for subsonic server (optional, if you don't want to use password)
+        s = nil, -- salt for subsonic server (optional, if you don't want to use password)
+        -- see https://www.subsonic.org/pages/api.jsp Authentication section for more details
+      }
     }
     win = {
       -- see https://github.com/folke/snacks.nvim/blob/main/docs/win.md#%EF%B8%8F-config
       backdrop = false,
 			height = 0.8,
-			width = or 0.8,
+			width = 0.6,
 			border = "rounded",
 			title = "Music Panel",
 			title_pos = "center",
     }
     keys = {
       close = "<Esc>", -- key to close the panel
-      toggle = "<Space>", -- key to toggle play/pause
       search = { "<CR>", "s" }, -- key to search by keyword
-      panel = ";", -- key to open the panel
-      mode = "m", -- key to toggle playback mode
-      prev_search = "k", -- key to go to previous search result
-      next_search = "j", -- key to go to next search result
+      toggle = "<Space>", -- key to toggle play/pause
       append = "a", -- key to append song to playlist
       replace = "r", -- key to replace current playlist with song
+      switch = ";", -- key to open the panel
+      mode = "m", -- key to toggle playback mode
+      next_search = "j", -- key to go to next search result
+      prev_search = "k", -- key to go to previous search result
+      next = ">", -- key to go to next song in playlist
+      prev = "<", -- key to go to previous song in playlist
     },
   }
 }
@@ -77,15 +81,17 @@ Except for the keys defined in the configuration, the following keymaps are avai
 ### Features
 
 - play/pause music
-- change playback mode
+- change playback mode(normal, repeat, playlist repeat)
 - search by keyword.
 - navigate through search results
 - append or replace current playlist with a song
-- display current playlist
+- display current playlist and switch between songs
 
 ### Todo's
 
 - [ ] subsonic playlist
+- [ ] random play
+- [ ] multi source support (multiple subsonic servers, etc.)
 - [ ] switch song in playlist
 - [ ] modify playlist(low priority)
 

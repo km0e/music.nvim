@@ -1,18 +1,3 @@
----@class music.ui.state
----@field search? music.backend.song[] all search results
----@field soffset? number select search offset
----@field paused? boolean is the player paused
----@field mode? "once" | "loop" | "pl" | "pl_loop"
----@field title? string the current song title
----@field artist? string the current song artist
----@field album? string the current song album
----@field total_time? number the total time of the current song
----@field playing_time? number the current playing time of the song
----@field playlist? music.backend.song[]  the current playlist
----@field playing? number the index of the currently playing song in the playlist
----@field ploffset? number the offset of the playlist, used for pagination
----
----
 ---@class music.ui.key
 ---@field [1] string
 ---@field mode? string "i"|"n"
@@ -22,94 +7,55 @@
 
 local M = {
 	layout = nil,
-	search = nil,
+	input = nil,
 	p = nil,
 	last_win = nil,
 	ns_id = nil,
 	---@type "select"|"panel"
 	mode = "panel",
-	---@type music.ui.state
-	state = {
-		search = {},
-		soffset = 0,
-		paused = false,
-		mode = "once",
-		title = "Unknown Title",
-		artist = "Unknown Artist",
-		album = "Unknown Album",
-		total_time = 0.00,
-		playing_time = 0.00,
-		playlist = {},
-	},
-	components = {
-		select = require("music.ui.select"),
-		panel = require("music.ui.panel"),
-	},
+	playing = "",
 }
 
+---@type music.source
+local src = require("music.source")
+local core = require("music.core")
+local select = require("music.ui.select")
+local panel = require("music.ui.panel")
+
 local modes = {
-	once = "loop",
-	loop = "pl",
-	pl = "pl_loop",
-	pl_loop = "once",
+	pl = "loop",
+	loop = "pl_loop",
+	pl_loop = "pl",
 }
 
 local Snacks = require("snacks")
-local b = require("music.backend")
 local u = require("music.util")
 
-function M:start()
-	self.last_win = vim.api.nvim_get_current_win()
-	b.lazy_setup()
-
-	self.layout:unhide()
-	self.search:focus()
-	self.mode = "panel"
-
-	b.mode(modes[M.state.mode]) -- NOTE: this is a workaround to set the mode initially
-	self:render()
-end
-
-function M:render()
-	self.components[self.mode]:render(self.p, self.ns_id, self.state)
-end
-
----@param msg music.ui.state
-function M:update(msg)
-	-- u.notify("Updating music UI with message: " .. vim.inspect(msg), vim.log.levels.DEBUG)
-	if msg.soffset and msg.soffset ~= self.state.soffset then --NOTE:outdated
+---@param mode? "select"|"panel"
+local function render(mode)
+	if mode and mode ~= M.mode then
 		return
 	end
 	local map = {
-		search = "select",
-		album = "panel",
-		artist = "panel",
-		title = "panel",
-		total_time = "panel",
-		playing_time = "panel",
-		paused = "panel",
-		mode = "panel",
-		playlist = "panel",
-		playing = "panel",
+		select = select,
+		panel = panel,
 	}
-	local need_render = {}
-	for key, value in pairs(msg) do
-		if map[key] then
-			need_render[map[key]] = true
-			self.state[key] = value
-		end
-	end
-	if self.last_win == nil then
-		return
-	end
-	if need_render[self.mode] then
-		self:render()
-	end
+	map[M.mode]:render(M.p, M.ns_id, M.playing)
+end
+
+function M:start()
+	self.last_win = vim.api.nvim_get_current_win()
+	core:lazy_setup()
+
+	self.layout:unhide()
+	self.input:focus()
+
+	render()
 end
 
 ---@param count? number
 local function search(count)
-	if type(count) ~= "number" then
+	if type(count) ~= "number" then --NOTE:may be called by `Key`
 		-- If count is not provided, use the current window height
 		count = vim.api.nvim_win_get_height(M.p.win)
 	end
@@ -117,7 +63,18 @@ local function search(count)
 	if line == "" then
 		return
 	end
-	b.search(line, M.state.soffset, count)
+	src:search(line, select.offset, count, function(songs)
+		if not songs or #songs == 0 then
+			if select.offset ~= 0 then
+				select.offset = select.offset - vim.api.nvim_win_get_height(M.p.win)
+			end
+			return
+		end
+		for i, song in ipairs(songs) do
+			select.search_list[select.offset + i] = song
+		end
+		render("select")
+	end)
 end
 
 local actions = {
@@ -127,56 +84,64 @@ local actions = {
 		M.last_win = nil
 	end,
 	search = search,
-	toggle = b.toggle,
+	toggle = core.toggle,
 	append = function()
-		local song = M.state.search[vim.v.count1]
+		local song = select.search_list[vim.v.count1]
 		if song then
-			b.play(song.id, #M.state.playlist > 0)
+			core.load(song.id, {
+				append = #panel.playlist > 0,
+				play = false,
+			})
 		end
 	end,
 	replace = function()
-		local song = M.state.search[vim.v.count1]
+		local song = select.search_list[vim.v.count1]
 		if song then
-			b.play(song.id)
+			core.load(song.id)
 		end
 	end,
 	select = function()
 		if M.mode == "select" then
 			return
 		end
-		M.components.panel:clear(M.p, M.ns_id)
 		M.mode = "select"
-		M:render()
+		panel:clear(M.p, M.ns_id)
+		render("select")
 	end,
-	panel = function()
+	switch = function()
 		if M.mode == "panel" then
-			return
+			M.mode = "select"
+			panel:clear(M.p, M.ns_id)
+			render("select")
+		else
+			M.mode = "panel"
+			render("panel")
 		end
-		M.components.select:clear(M.p, M.ns_id)
-		M.mode = "panel"
-		M:render()
 	end,
 	mode = function()
-		M:update({
-			mode = modes[M.state.mode],
-		})
-		b.mode(modes[M.state.mode])
+		core:mode(modes[panel.mode])
 	end,
 	next_search = function()
 		local height = vim.api.nvim_win_get_height(M.p.win)
-		if #M.state.search < height then
+		if #select.search_list < height then
 			return
 		end
-		M.state.soffset = M.state.soffset + height
+		select.offset = select.offset + height
 		search(height)
 	end,
 	prev_search = function()
-		if M.state.soffset == 0 then
+		if select.offset == 0 then
 			return
 		end
 		local height = vim.api.nvim_win_get_height(M.p.win)
-		M.state.soffset = math.max(0, M.state.soffset - height)
+		select.offset = math.max(0, select.offset - height)
 		search(height)
+	end,
+	next = function()
+		core:next()
+	end,
+	prev = function()
+		core:prev()
 	end,
 }
 
@@ -188,10 +153,12 @@ function M:setup_keys(keys)
 		["toggle"] = "<Space>",
 		["append"] = ",",
 		["replace"] = ".",
-		["panel"] = ";",
+		["switch"] = ";",
 		["mode"] = "m",
 		["next_search"] = "j",
 		["prev_search"] = "k",
+		["next"] = ">",
+		["prev"] = "<",
 	}
 
 	keys = vim.tbl_deep_extend("force", default, keys)
@@ -225,14 +192,15 @@ function M:setup_keys(keys)
 	return skeys
 end
 
-function M.setup(opts)
+function M:setup(opts)
 	opts = opts or {}
 
-	M.search = Snacks.win.new({
+	self.input = Snacks.win.new({
 		show = false,
-		keys = M:setup_keys(opts.keys or {}),
+		keys = self:setup_keys(opts.keys or {}),
+		ft = "music_input",
 	})
-	M.p = Snacks.win.new({
+	self.p = Snacks.win.new({
 		show = false,
 	})
 	local lo = {
@@ -241,10 +209,10 @@ function M.setup(opts)
 		title = "Music Panel",
 		title_pos = "center",
 		height = 0.8,
-		width = 0.8,
+		width = 0.6,
 		box = "vertical",
 		[1] = {
-			win = "search",
+			win = "input",
 			height = 1,
 		},
 		[2] = {
@@ -254,54 +222,78 @@ function M.setup(opts)
 	}
 	lo = vim.tbl_deep_extend("force", lo, opts.win or {})
 
-	M.layout = Snacks.layout.new({
+	self.layout = Snacks.layout.new({
 		show = false,
 		wins = {
-			search = M.search,
-			panel = M.p,
+			input = self.input,
+			panel = self.p,
 		},
 		layout = lo,
 	})
-	M.last_win = vim.api.nvim_get_current_win()
-	M.layout:show()
+	self.last_win = vim.api.nvim_get_current_win()
+	self.layout:show()
 	actions["close"]()
 
 	vim.api.nvim_create_autocmd("WinLeave", {
-		group = M.search.augroup,
-		buffer = M.search.buf,
+		group = self.input.augroup,
+		buffer = self.input.buf,
 		callback = actions["close"],
 	})
 
 	-- Clear the namespace when switching to search mode
 	vim.api.nvim_create_autocmd("InsertEnter", {
-		group = M.search.augroup,
-		buffer = M.search.buf,
-		callback = actions["select"],
+		group = self.input.augroup,
+		buffer = self.input.buf,
+		callback = actions.select,
 	})
 
 	vim.api.nvim_create_autocmd("InsertCharPre", {
-		group = M.search.augroup,
-		buffer = M.search.buf,
-		callback = actions["search"],
+		group = self.input.augroup,
+		buffer = self.input.buf,
+		callback = actions.search,
 	})
-
-	-- Render function to update the panel buffer
-	b.render = vim.schedule_wrap(function(us)
-		M:update(us)
-	end)
 
 	-- Initialize the panel buffer with empty lines
 	local space = {}
-	for _ = 0, vim.api.nvim_win_get_height(M.p.win) - 1 do
+	for _ = 0, vim.api.nvim_win_get_height(self.p.win) - 1 do
 		table.insert(space, "")
 	end
-	vim.api.nvim_buf_set_lines(M.p.buf, 0, -1, false, space)
+	vim.api.nvim_buf_set_lines(self.p.buf, 0, -1, false, space)
 
-	M.ns_id = vim.api.nvim_create_namespace("PluginMusicUI")
+	self.ns_id = vim.api.nvim_create_namespace("PluginMusicUI")
 
 	vim.api.nvim_create_user_command("Music", function()
-		M:start()
+		self:start()
 	end, { desc = "Open the music panel" })
+
+	---@type music.core.observer
+	---@diagnostic disable-next-line: missing-fields
+	local observer = {}
+	observer.playing = function(id)
+		self.playing = id
+		render()
+	end
+	observer.playlist = function(list)
+		panel.playlist = list
+		render("panel")
+	end
+	observer.pause = function(paused)
+		panel.paused = paused
+		render("panel")
+	end
+	observer.playing_time = function(time)
+		panel.playing_time = time
+		render("panel")
+	end
+	observer.total_time = function(time)
+		panel.total_time = time
+		render("panel")
+	end
+	observer.mode = function(mode)
+		panel.mode = mode
+		render("panel")
+	end
+	core:setup(observer)
 end
 
 return M
