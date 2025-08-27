@@ -24,20 +24,30 @@
 ---@field total_time fun(seconds: number)
 ---@field mode fun(mode: string)
 
+local uv = vim.uv
+
 _G.plugin_music = _G.plugin_music
-		or {
-			_mpv = {
-				---@type uv.uv_pipe_t |nil
-				skt = nil,
-				rid = 0,
-				rcbs = {},
-				---@type table<string, fun(data: any): nil>
-				ocbs = {},
-				---@class plenary.async.control.mpsc
-				---@field send fun(data: any): nil
-				tx = nil,
-			},
-		}
+	or {
+		_mpv = {
+			path = (function()
+				local os = uv.os_uname()
+				if os.sysname == "Linux" or os.sysname == "Darwin" then
+					return "/tmp/neovim-plugin-music-mpv-socket"
+				elseif os.sysname == "Windows" then
+					return "\\\\.\\pipe\\neovim-plugin-music-mpv-socket"
+				else
+					error("Unsupported OS: " .. os.sysname)
+				end
+			end)(),
+			---@type uv.uv_pipe_t |nil
+			skt = nil,
+			rid = 1, --- request ID counter, must starts from 1
+			rcbs = {},
+			---@class plenary.async.control.mpsc
+			---@field send fun(data: any): nil
+			tx = nil,
+		},
+	}
 
 local mpv = _G.plugin_music._mpv
 
@@ -56,7 +66,6 @@ local M = {
 	observer = {},
 }
 
-local uv = vim.uv
 local a = require("plenary.async")
 local u = require("music.util")
 
@@ -69,7 +78,6 @@ local loop_playlist = false
 ---@type table<string, fun(data: any)>
 local mpv_observer = {
 	playlist = function(data)
-		vim.notify("MPV playlist updated: " .. vim.inspect(data), vim.log.levels.DEBUG)
 		---@type music.backend.mpv.playlist_item[]
 		data = data or {}
 		local lp, chg = nil, false
@@ -214,21 +222,15 @@ local function after_connect()
 			buffer = rest
 			if line ~= "" then
 				local msg = vim.json.decode(line)
-				mpv.tx.send(msg)
+				mpv.tx.send(msg) ---TODO:restart server if server broken
 			end
 		end
 	end
 
 	mpv.skt:read_start(handle_response)
-	local oid = 0
-	for prop, cb in pairs(mpv_observer) do
-		mpv.req({ "observe_property", oid, prop }, function(response)
-			if response.error ~= "success" then
-				u.notify("Failed to observe property " .. prop .. ": " .. vim.inspect(response), vim.log.levels.ERROR)
-				return
-			end
-			mpv.ocbs[prop] = cb
-		end)
+	local oid = 1 -- Observe IDs must start from 1
+	for prop, _ in pairs(mpv_observer) do
+		M.exec({ "observe_property", oid, prop })
 		oid = oid + 1
 	end
 end
@@ -237,7 +239,7 @@ end
 local function _start()
 	local job = require("plenary.job"):new({
 		command = "mpv",
-		args = { "--idle", "--input-ipc-server=/tmp/neovim-plugin-music-mpv-socket", "--no-terminal", "--no-video" },
+		args = { "--idle", "--input-ipc-server=" .. mpv.path, "--no-terminal", "--no-video" },
 		on_exit = function(_, return_val)
 			mpv.skt = nil
 			if return_val ~= 0 then
@@ -252,7 +254,7 @@ local function _start()
 
 	uv.sleep(500) -- Give MPV some time to start
 
-	local err = a.uv.pipe_connect(mpv.skt, "/tmp/neovim-plugin-music-mpv-socket")
+	local err = a.uv.pipe_connect(mpv.skt, mpv.path)
 	if err then
 		vim.notify("Failed to connect to MPV server: " .. err, vim.log.levels.ERROR)
 		mpv.skt:close()
@@ -272,26 +274,37 @@ local function start()
 		vim.notify("Failed to create socket", vim.log.levels.ERROR)
 		return
 	end
-	if a.uv.fs_stat("/tmp/neovim-plugin-music-mpv-socket") == nil then
-		_start()
+	local err = a.uv.fs_stat(mpv.path)
+	if err then
+		if err:match("ENOENT") then
+			vim.notify("Starting new MPV instance", vim.log.levels.INFO)
+			_start()
+		else
+			vim.notify("Failed to stat MPV socket: " .. err, vim.log.levels.ERROR)
+			mpv.skt:close()
+			mpv.skt = nil
+		end
 		return
 	end
-	local err = a.uv.pipe_connect(mpv.skt, "/tmp/neovim-plugin-music-mpv-socket")
+	err = a.uv.pipe_connect(mpv.skt, mpv.path)
 	if not err then
+		vim.notify("Connected to existing MPV instance", vim.log.levels.INFO)
 		after_connect()
 		return
 	end
-	if err:match("ENOENT") then
-		_start()
-		return
-	end
-	err = a.uv.fs_unlink("/tmp/neovim-plugin-music-mpv-socket")
+	mpv.skt:close()
+	err = a.uv.fs_unlink(mpv.path)
 	if err then
 		vim.notify("Failed to unlink existing MPV socket: " .. err, vim.log.levels.ERROR)
-		mpv.skt:close()
 		mpv.skt = nil
 		return
 	end
+	mpv.skt = uv.new_pipe(true)
+	if not mpv.skt then
+		vim.notify("Failed to create socket", vim.log.levels.ERROR)
+		return
+	end
+	vim.notify("Unlinked stale MPV socket, starting new MPV instance", vim.log.levels.INFO)
 	_start()
 end
 
@@ -313,7 +326,7 @@ local function start_exec_queue()
 					vim.notify("Received response for unknown request ID: " .. e.request_id, vim.log.levels.WARN)
 				end
 			elseif e.id then
-				local cb = mpv.ocbs[e.name]
+				local cb = mpv_observer[e.name]
 				if not cb then
 					vim.notify("Received response for unknown observe ID: " .. e.id, vim.log.levels.WARN)
 				elseif e.data ~= nil then
@@ -431,6 +444,9 @@ function M:mode(mode)
 end
 
 function M:quit()
+	if not mpv.job then --- Just connected to an existing mpv instance, do not quit it.
+		return
+	end
 	self.exec("quit")
 end
 

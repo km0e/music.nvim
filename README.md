@@ -92,7 +92,6 @@ Except for the keys defined in the configuration, the following keymaps are avai
 - [ ] subsonic playlist
 - [ ] random play
 - [ ] multi source support (multiple subsonic servers, etc.)
-- [ ] switch song in playlist
 - [ ] modify playlist(low priority)
 
 ### Inspiration/Credits
