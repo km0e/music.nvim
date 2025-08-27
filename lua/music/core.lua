@@ -89,12 +89,8 @@ function M:prev()
 	b:prev()
 end
 
--- NOTE: This function is used to change the playback mode in MPV.
--- It uses a timer to ensure that the mode change is applied after a short delay for debounce.
 function M:mode(mode)
-	su.debounce(function()
-		b:mode(mode)
-	end, { ms = 100 })()
+	b:mode(mode)
 end
 
 return M

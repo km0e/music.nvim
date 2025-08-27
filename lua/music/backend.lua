@@ -25,19 +25,19 @@
 ---@field mode fun(mode: string)
 
 _G.plugin_music = _G.plugin_music
-	or {
-		_mpv = {
-			---@type uv.uv_pipe_t |nil
-			skt = nil,
-			rid = 0,
-			rcbs = {},
-			---@type table<string, fun(data: any): nil>
-			ocbs = {},
-			---@class plenary.async.control.mpsc
-			---@field send fun(data: any): nil
-			tx = nil,
-		},
-	}
+		or {
+			_mpv = {
+				---@type uv.uv_pipe_t |nil
+				skt = nil,
+				rid = 0,
+				rcbs = {},
+				---@type table<string, fun(data: any): nil>
+				ocbs = {},
+				---@class plenary.async.control.mpsc
+				---@field send fun(data: any): nil
+				tx = nil,
+			},
+		}
 
 local mpv = _G.plugin_music._mpv
 
@@ -69,6 +69,7 @@ local loop_playlist = false
 ---@type table<string, fun(data: any)>
 local mpv_observer = {
 	playlist = function(data)
+		vim.notify("MPV playlist updated: " .. vim.inspect(data), vim.log.levels.DEBUG)
 		---@type music.backend.mpv.playlist_item[]
 		data = data or {}
 		local lp, chg = nil, false
@@ -280,6 +281,10 @@ local function start()
 		after_connect()
 		return
 	end
+	if err:match("ENOENT") then
+		_start()
+		return
+	end
 	err = a.uv.fs_unlink("/tmp/neovim-plugin-music-mpv-socket")
 	if err then
 		vim.notify("Failed to unlink existing MPV socket: " .. err, vim.log.levels.ERROR)
@@ -311,7 +316,7 @@ local function start_exec_queue()
 				local cb = mpv.ocbs[e.name]
 				if not cb then
 					vim.notify("Received response for unknown observe ID: " .. e.id, vim.log.levels.WARN)
-				elseif e.data then
+				elseif e.data ~= nil then
 					cb(e.data)
 				end
 			elseif e.cmd then
@@ -369,13 +374,18 @@ function M:trigger(...)
 		playlist = "playlist",
 		playing_time = "playing_time",
 		total_time = "duration",
+		mode = { "loop-file", "loop-playlist" },
 	}
 	---@type table<string, boolean>
 	local gets = {}
 	for _, arg in ipairs(args) do
 		local hint = map[arg]
-		if hint then
+		if type(hint) == "string" then
 			gets[hint] = true
+		elseif type(hint) == "table" then
+			for _, h in ipairs(hint) do
+				gets[h] = true
+			end
 		else
 			vim.notify("Unknown trigger: " .. arg, vim.log.levels.WARN)
 		end
@@ -408,14 +418,15 @@ function M:prev()
 end
 
 function M:mode(mode)
+	-- vim.notify("Setting loop mode to: " .. mode, vim.log.levels.INFO)
 	if mode == "pl" then
-		self.exec({ "set_property", "loop-file", false })
+		self.exec({ "set_property", "loop", false })
 		self.exec({ "set_property", "loop-playlist", false })
 	elseif mode == "loop" then
-		self.exec({ "set_property", "loop-file", "inf" })
+		self.exec({ "set_property", "loop", "inf" })
 	elseif mode == "pl_loop" then
-		self.exec({ "set_property", "loop-file", false })
-		self.exec({ "set_property", "loop-file", "inf" })
+		self.exec({ "set_property", "loop", false })
+		self.exec({ "set_property", "loop-playlist", "inf" })
 	end
 end
 
