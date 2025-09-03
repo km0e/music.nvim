@@ -1,3 +1,5 @@
+---@type music._source
+---@diagnostic disable-next-line: missing-fields
 local M = {
 	url = nil,
 	q = {
@@ -57,13 +59,10 @@ local function query(endpoint, q)
 		vim.notify("Failed to parse response for " .. endpoint, vim.log.levels.ERROR)
 		return nil
 	end
-	if not u.field_check("subsonic response", data, "subsonic-response") then
+	if not u.field_check("subsonic response", data, { "subsonic-response", "status" }) then
 		return nil
 	end
 	local resp = data["subsonic-response"]
-	if not u.field_check("subsonic response", resp, "status") then
-		return nil
-	end
 	if resp.status ~= "ok" then
 		vim.notify("Query failed: " .. resp.status, vim.log.levels.ERROR)
 		return nil
@@ -83,7 +82,7 @@ end
 ---@param name string
 ---@param offset number
 ---@param count number
----@return music.backend.song[]|nil
+---@return music.song.meta[]|nil
 function M:search(name, offset, count)
 	local resp = query("search3", {
 		query = name,
@@ -103,7 +102,7 @@ function M:search(name, offset, count)
 end
 
 ---@param id string
----@return music.backend.song|nil
+---@return music.song.meta|nil
 function M:get(id)
 	local resp = query("getSong", { id = id })
 	if not resp or not u.field_check("subsonic getSong", resp, "song") then
@@ -120,6 +119,25 @@ function M:stream(id)
 		id = id,
 	})
 	return url .. "?" .. u.kv_to_str(q)
+end
+
+function M:lyric(id)
+	local resp = query("getLyricsBySongId", { id = id })
+	if not resp or not u.field_check("subsonic getLyrics", resp, { "lyricsList", "structuredLyrics" }) then
+		return {}
+	end
+	local all_lyrics = resp.lyricsList.structuredLyrics
+	if #all_lyrics == 0 then
+		return {}
+	end
+	---@type music.source.lyric
+	local slyrics = all_lyrics[1].line or {}
+	---@type music.lyric
+	local lyrics = {}
+	for i, line in ipairs(slyrics) do
+		lyrics[i] = { time = line.start / 1000, line = line.value }
+	end
+	return lyrics
 end
 
 return M

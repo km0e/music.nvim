@@ -1,7 +1,7 @@
-local l = require("music.ui.list")
+local l = require("music.panel.list")
 local u = require("music.util")
----@class music.ui.panel
----@field playlist music.backend.song[]
+---@class music.panel.spanel
+---@field playlist music.song.meta[]
 ---@field playing_time number
 ---@field total_time number
 local M = {
@@ -9,7 +9,7 @@ local M = {
 	offset = 0,
 	playing_time = 0.00,
 	total_time = 1.00,
-	paused = false,
+	pause = false,
 	mode = "pl",
 }
 
@@ -22,10 +22,6 @@ local function transform_mode(mode)
 		return "🔁"
 	end
 end
-
----@class music.ui.panel.sdw_cache
----@field [string] {title: number, artist: number, album: number}
-local sdw_cache = {}
 
 local function make_progress_bar(current, total, width)
 	local ratio = math.min(current / total, 1)
@@ -58,8 +54,8 @@ function M:render(win, ns_id, playing)
 	local bar = make_progress_bar(self.playing_time, self.total_time, rest)
 	self.emt = vim.api.nvim_buf_set_extmark(win.buf, ns_id, start, 0, {
 		virt_text = {
-			{ bar, "Identifier" },
-			{ " ", "Normal" },
+			{ bar,  "Identifier" },
+			{ " ",  "Normal" },
 			{ text, "String" },
 		},
 		virt_text_pos = "overlay", --
@@ -68,7 +64,7 @@ function M:render(win, ns_id, playing)
 	})
 
 	local paused = "⏸️"
-	if self.paused then
+	if self.pause then
 		paused = "▶️"
 	end
 	local mode = transform_mode(self.mode)
@@ -78,9 +74,9 @@ function M:render(win, ns_id, playing)
 	self.ems = vim.api.nvim_buf_set_extmark(win.buf, ns_id, start + 1, 0, {
 		virt_text = {
 			{ string.rep(" ", lpadding), "Normal" },
-			{ paused, "Identifier" },
+			{ paused,                    "Identifier" },
 			{ string.rep(" ", rpadding), "Normal" },
-			{ mode, "String" },
+			{ mode,                      "String" },
 		},
 		virt_text_pos = "overlay", --
 		hl_mode = "combine",

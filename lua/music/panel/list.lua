@@ -2,14 +2,14 @@ local M = {
 	em = {},
 }
 
----@class music.ui.list.sdw_cache
+---@class music.panel.list.sdw_cache
 ---@field [string] {title: number, artist: number, album: number}
 local sdw_cache = {}
 
 ---@param win snacks.win
 ---@param ns_id number
 ---@param playing string
----@param list music.backend.song[]
+---@param list music.song.meta[]
 function M.render(win, ns_id, playing, list)
 	local width = vim.api.nvim_win_get_width(win.win)
 	local ml = { title = 0, artist = 0, album = 0 }
@@ -73,18 +73,18 @@ function M.render(win, ns_id, playing, list)
 		end
 		M.em[i] = vim.api.nvim_buf_set_extmark(win.buf, ns_id, i - 1, 0, {
 			virt_text = {
-				{ string.format("%02d", i), "Type" },
+				{ string.format("%02d", i),    "Type" },
 				{ "|" .. string.rep(" ", tlp), "Normal" },
-				{ song.title, style },
-				{ string.rep(" ", trp), "Normal" },
-				{ separator, "Normal" },
-				{ string.rep(" ", alp), "Normal" },
-				{ song.artist or "", style },
-				{ string.rep(" ", arp), "Normal" },
-				{ separator, "Normal" },
-				{ string.rep(" ", alp2), "Normal" },
-				{ song.album or "", style },
-				{ string.rep(" ", arp2), "Normal" },
+				{ song.title,                  style },
+				{ string.rep(" ", trp),        "Normal" },
+				{ separator,                   "Normal" },
+				{ string.rep(" ", alp),        "Normal" },
+				{ song.artist or "",           style },
+				{ string.rep(" ", arp),        "Normal" },
+				{ separator,                   "Normal" },
+				{ string.rep(" ", alp2),       "Normal" },
+				{ song.album or "",            style },
+				{ string.rep(" ", arp2),       "Normal" },
 			},
 			virt_text_pos = "overlay", --
 			hl_mode = "combine",

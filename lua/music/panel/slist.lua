@@ -1,8 +1,8 @@
-local l = require("music.ui.list")
+local l = require("music.panel.list")
 local u = require("music.util")
 
----@class music.ui.select
----@field search_list music.backend.song[]
+---@class music.panel.slist
+---@field search_list music.song.meta[]
 ---@field offset number
 local M = {
 	search_list = {},

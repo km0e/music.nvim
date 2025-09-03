@@ -16,13 +16,16 @@
 ---@field id integer
 ---@field name string
 ---
+---
+---@alias music.backend.observer.playlist fun(list: string[])
+---
 ---@class music.backend.observer
----@field playing fun(id: string)
----@field playlist fun(list: string[])
----@field pause fun(pause: boolean)
----@field playing_time fun(seconds: number)
----@field total_time fun(seconds: number)
----@field mode fun(mode: string)
+---@field playing? music.observer.playing
+---@field playlist? music.backend.observer.playlist
+---@field pause? music.observer.pause
+---@field playing_time? music.observer.playing_time
+---@field total_time? music.observer.total_time
+---@field mode? music.observer.mode
 
 local uv = vim.uv
 
@@ -52,8 +55,8 @@ _G.plugin_music = _G.plugin_music
 local mpv = _G.plugin_music._mpv
 
 ---@class music.backend
----@field observer music.backend.observer
----@field setup fun(self: music.backend, observer?: music.backend.observer)
+---@field observe fun(self: music.backend, name: music.observer.field, observer: music.backend.observer)
+---@field setup fun(self: music.backend)
 ---@field lazy_setup fun(self: music.backend)
 ---@field toggle fun(self: music.backend)
 ---@field load fun(self: music.backend, url: string, opts?: {append: boolean,play: boolean})
@@ -373,9 +376,19 @@ function M:load(url, opts)
 	self.exec(cmd)
 end
 
-function M:setup(observer)
-	self.observer = observer or {}
+function M:observe(name, observer)
+	local fn = self.observer[name]
+	if fn then
+		self.observer[name] = function(...)
+			observer[name](...)
+			fn(...)
+		end
+	else
+		self.observer[name] = observer[name]
+	end
+end
 
+function M:setup()
 	start_exec_queue()
 end
 

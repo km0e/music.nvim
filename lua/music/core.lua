@@ -1,19 +1,41 @@
----@class music.backend.song
+---@class music.song.meta
 ---@field id string
 ---@field title string
 ---@field artist string
 ---@field album string
 ---
+---@alias music.observer.playing fun(id: string)
+---
+---@alias music.core.observer.playlist fun(list: music.song.meta[])
+---
+---@alias music.observer.pause fun(pause: boolean)
+---
+---@alias music.observer.playing_time fun(seconds: number)
+---
+---@alias music.observer.total_time fun(seconds: number)
+---
+---@alias music.observer.mode fun(mode: string)
+---
+---@alias music.observer.field "playing"|"playlist"|"pause"|"playing_time"|"total_time"|"mode"
+---
 ---@class music.core.observer
----@field playing fun(id: string)
----@field playlist fun(list: music.backend.song[])
----@field pause fun(paused: boolean)
----@field playing_time fun(seconds: number)
----@field total_time fun(seconds: number)
----@field mode fun(mode: string)
+---@field playing? music.observer.playing
+---@field playlist? music.core.observer.playlist
+---@field pause? music.observer.pause
+---@field playing_time? music.observer.playing_time
+---@field total_time? music.observer.total_time
+---@field mode? music.observer.mode
+---
+---@class music.lyric_item
+---@field time number
+---@field line string
 
+---@alias music.lyric music.lyric_item[]
+
+---
 ---@class music.core
----@field setup fun(self, observer:music.core.observer)
+---@field observe fun(self, name: music.observer.field, observer: music.core.observer)
+---@field setup fun(self)
 ---@field lazy_setup fun(self)
 ---@field load fun(id: string, opts?: {append: boolean,play: boolean})
 ---@field toggle fun(self)
@@ -30,36 +52,54 @@ local uv = vim.uv
 ---@type music.source
 local src = require("music.source")
 
-function M:setup(observer)
-	---@type music.backend.observer
-	---@diagnostic disable-next-line: missing-fields
-	local bobserver = {}
-	if observer.playing then
-		bobserver.playing = vim.schedule_wrap(function(id)
-			observer.playing("subsonic:" .. id) --FIX: This assumes 'subsonic' as the source.
-		end)
+local observers = {}
+function M:observe(name, observer)
+	local fn = observers[name]
+	if not fn then
+		observers[name] = observer[name]
+	else
+		observers[name] = function(...)
+			observer[name](...)
+			fn(...)
+		end
 	end
-	if observer.playlist then
-		bobserver.playlist = vim.schedule_wrap(function(list)
-			---@type music.backend.song[]
+end
+
+function M:setup()
+	b:observe("playing", {
+		playing = vim.schedule_wrap(function(id)
+			observers.playing("subsonic:" .. id) --FIX: This assumes 'subsonic' as the source.
+		end),
+	})
+	b:observe("playlist", {
+		playlist = vim.schedule_wrap(function(list)
+			---@type music.song.meta[]
 			local pl = {}
 			for i, song_id in ipairs(list) do
 				pl[i] = src:get("subsonic:" .. song_id) --FIX: This assumes 'subsonic' as the source.
 			end
-			observer.playlist(pl)
-		end)
+			observers.playlist(pl)
+		end),
+	})
+	local observe = function(name)
+		b:observe(name, {
+			[name] = vim.schedule_wrap(function(...)
+				local fn = observers[name]
+				if fn then
+					fn(...)
+				end
+			end),
+		})
 	end
-	bobserver.pause = vim.schedule_wrap(observer.pause)
-	bobserver.playing_time = vim.schedule_wrap(observer.playing_time)
-	bobserver.total_time = vim.schedule_wrap(observer.total_time)
-	bobserver.mode = vim.schedule_wrap(observer.mode)
-	b:setup(bobserver)
-
-	uv.new_timer():start(100, 100, function()
+	observe("pause")
+	observe("playing_time")
+	observe("total_time")
+	observe("mode")
+	uv.new_timer():start(1000, 100, function()
 		b:trigger("playing_time")
 	end)
 
-	local augid = vim.api.nvim_create_augroup("PluginMusicBackend", { clear = true })
+	local augid = vim.api.nvim_create_augroup("PluginMusic", { clear = false })
 	vim.api.nvim_create_autocmd("VimLeavePre", {
 		group = augid,
 		callback = function()
