@@ -19,46 +19,40 @@ Default configuration looks like this:
   opts = {
       source = {
         subsonic = {
-          u = "", -- username for subsonic server
-          p = "", -- password for subsonic server
-          t = "", -- token for subsonic server (optional, if you don't want to use password)
-          s = "", -- salt for subsonic server (optional, if you don't want to use password)
-          url = "", -- url for subsonic server
-          -- see https://www.subsonic.org/pages/api.jsp Authentication section for more details
+          {
+            id = "default", -- id of the source, must be unique
+            url = "", -- url for subsonic server
+            q = {
+              u = "", -- username for subsonic server
+              p = "", -- password for subsonic server
+              t = "", -- token for subsonic server (optional, if you don't want to use password)
+              s = "", -- salt for subsonic server (optional, if you don't want to use password)
+            },
+            -- see https://www.subsonic.org/pages/api.jsp Authentication section for more details
+          },
         },
       },
-      -- see https://github.com/folke/snacks.nvim/blob/main/docs/layout.md#-types
-      ---@type snacks.layout.Box
+      -- see https://github.com/folke/snacks.nvim/blob/main/docs/picker.md#%EF%B8%8F-config
+      ---@type snacks.picker.Config
       panel = {
-        lo = {
-          backdrop = false,
-          border = "rounded",
-          title = "Music Panel",
-          title_pos = "center",
-          height = 0.8,
-          width = 0.6,
-          box = "vertical",
-          [1] = {
-            win = "input",
-            height = 1,
+
+        title = "Search Music",
+        label = "Enter search query:",
+        win = {
+          input = {
+            keys = {
+              ["<CR>"] = { "search", mode = "i" }, -- search in insert mode
+              ["<Space>"] = "toggle", -- play/pause
+              [","] = "append", -- append to current playlist
+              ["."] = "replace", -- replace current playlist
+              ["m"] = "mode", -- switch mode between search, playlist
+              [">"] = "next", -- next song
+              ["<"] = "prev", -- previous song
+            },
           },
-          [2] = {
-            win = "panel",
-            border = "top",
+          preview = {
+            wo = { number = false, relativenumber = false, signcolumn = "no", foldcolumn = "0" },
           },
-        },
-        keys = {
-          ["<Esc>"] = "close", -- close the panel
-          ["<CR>"] = { "search", mode = "i" }, -- search in insert mode
-          ["<Space>"] = "toggle", -- play/pause
-          [","] = "append", -- append to current playlist
-          ["."] = "replace", -- replace current playlist
-          [";"] = "switch", -- switch between panel and lyric window
-          ["m"] = "mode", -- switch mode between search, playlist
-          ["j"] = "next_search", -- next search result
-          ["k"] = "prev_search", -- previous search result
-          [">"] = "next", -- next song
-          ["<"] = "prev", -- previous song
         },
       },
       -- see https://github.com/folke/snacks.nvim/blob/main/docs/win.md#%EF%B8%8F-config
@@ -66,8 +60,10 @@ Default configuration looks like this:
       lyric = {
         backdrop = false,
         border = "none",
+        row = 1,
+        col = 0.7,
         height = 1,
-        width = 30,
+        width = 50,
         keys = {
           [";"] = "leave", -- leave the lyric window
           ["<Left>"] = "mleft", -- move lyric window left
@@ -81,33 +77,30 @@ Default configuration looks like this:
         },
       },
     },
+  },
 }
 ```
 
 Actions table:
 
-|  ui   | action      | description                                           |
-| :---: | :---------- | :---------------------------------------------------- |
-| panel | close       | close the music panel                                 |
-| panel | search      | search for a song                                     |
-| panel | toggle      | play/pause the current song                           |
-| panel | append      | append the selected song to playlist                  |
-| panel | replace     | replace the current playlist                          |
-| panel | switch      | switch between search and playlist                    |
-| panel | mode        | change playback mode(normal, repeat, playlist repeat) |
-| panel | next_search | go to next search result                              |
-| panel | prev_search | go to previous search result                          |
-| panel | next        | play next song in the playlist                        |
-| panel | prev        | play previous song in the playlist                    |
-| lyric | leave       | leave the lyric window                                |
-| lyric | mleft       | move lyric window left                                |
-| lyric | mright      | move lyric window right                               |
-| lyric | mup         | move lyric window up                                  |
-| lyric | mdown       | move lyric window down                                |
-| lyric | inc_h       | increase height of lyric window                       |
-| lyric | dec_h       | decrease height of lyric window                       |
-| lyric | inc_w       | increase width of lyric window                        |
-| lyric | dec_w       | decrease width of lyric window                        |
+|  ui   | action  | description                                           |
+| :---: | :------ | :---------------------------------------------------- |
+| panel | search  | search for a song                                     |
+| panel | toggle  | play/pause the current song                           |
+| panel | append  | append the selected song to playlist                  |
+| panel | replace | replace the current playlist                          |
+| panel | mode    | change playback mode(normal, repeat, playlist repeat) |
+| panel | next    | play next song in the playlist                        |
+| panel | prev    | play previous song in the playlist                    |
+| lyric | leave   | leave the lyric window                                |
+| lyric | mleft   | move lyric window left                                |
+| lyric | mright  | move lyric window right                               |
+| lyric | mup     | move lyric window up                                  |
+| lyric | mdown   | move lyric window down                                |
+| lyric | inc_h   | increase height of lyric window                       |
+| lyric | dec_h   | decrease height of lyric window                       |
+| lyric | inc_w   | increase width of lyric window                        |
+| lyric | dec_w   | decrease width of lyric window                        |
 
 ### Showcase
 
@@ -124,17 +117,10 @@ https://github.com/user-attachments/assets/7b3fa82e-1ff2-401c-9f0e-a59e0ec92635
 
 Except for the keys defined in the configuration, the following keymaps are available in the music panel:
 
-|  key  | action                                                                 |
-| :---: | ---------------------------------------------------------------------- |
-| `N ,` | append to playlist (N is the number of the song)                       |
-| `N .` | replace current whole playlist with song (N is the number of the song) |
-
-- Auto commands:
-
-|      event      | action                                                              |
-| :-------------: | ------------------------------------------------------------------- |
-|  `InsertEnter`  | close the panel if it is open (to avoid conflicts with insert mode) |
-| `InsertCharPre` | always search for the input character with about 500ms delay        |
+|     key     | action                                                                 |
+| :---------: | ---------------------------------------------------------------------- |
+| `N append`  | append to playlist (N is the number of the song)                       |
+| `N replace` | replace current whole playlist with song (N is the number of the song) |
 
 ### Features
 
@@ -148,6 +134,7 @@ Except for the keys defined in the configuration, the following keymaps are avai
 
 ### Todo's
 
+- [ ] MPD support
 - [ ] subsonic playlist
 - [ ] random play
 - [ ] multi source support (multiple subsonic servers, etc.)

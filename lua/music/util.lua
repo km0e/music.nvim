@@ -22,7 +22,10 @@ function M.field_check(hint, data, ...)
 			return false
 		end
 		if not check_field(data, field) then
-			vim.notify(hint .. "Missing required field(s): " .. table.concat(field, ", "), vim.log.levels.ERROR)
+			vim.notify(
+				hint .. "Missing required field(s): " .. table.concat(field, ", ") .. "\nData: " .. vim.inspect(data),
+				vim.log.levels.ERROR
+			)
 			return false
 		end
 	end
@@ -72,15 +75,6 @@ function M.notify(msg, level)
 		--@type fun(notif: snacks.notifier.Notif): boolean
 		keep = keep,
 	})
-end
-
----@param win integer
-function M.fill_window(win, buf)
-	local space = {}
-	for _ = 0, vim.api.nvim_win_get_height(win) - 1 do
-		table.insert(space, "")
-	end
-	vim.api.nvim_buf_set_lines(buf, 0, -1, false, space)
 end
 
 return M

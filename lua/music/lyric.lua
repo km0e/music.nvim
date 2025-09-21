@@ -1,3 +1,6 @@
+local core = require("music.core")
+local Snacks = require("snacks")
+
 local M = {
 	p = nil,
 	ns_id = nil,
@@ -6,20 +9,12 @@ local M = {
 	em = nil,
 }
 
----@type music.source
-local src = require("music.source")
-local core = require("music.core")
-
-local Snacks = require("snacks")
-local u = require("music.util")
-
 function M:start()
-	core:lazy_setup()
-
 	if not self.p.win then
 		self.p:show()
 	end
 	self.p:focus()
+	core:refresh()
 end
 
 ---@param self snacks.win
@@ -124,13 +119,14 @@ function M:setup(opts)
 		actions = actions,
 		backdrop = false,
 		border = "none",
+		row = 1,
+		col = 0.7,
 		height = 1,
-		width = 30,
+		width = 50,
 	}
 
 	self.p = Snacks.win.new(vim.tbl_deep_extend("force", win_opts, opts or {}))
 
-	u.fill_window(self.p.win, self.p.buf)
 	self.p:hide()
 
 	self.ns_id = vim.api.nvim_create_namespace("PluginMusicUI")
@@ -139,49 +135,52 @@ function M:setup(opts)
 		self:start()
 	end, { desc = "Show Music Lyric Panel" })
 
-	core:observe("playing", {
-		playing = function(id)
-			self.times = {}
-			vim.api.nvim_buf_set_lines(self.p.buf, 0, -1, false, {})
-			for i, item in pairs(src:lyric(id)) do
-				table.insert(self.times, #self.times + 1, item.time)
-				vim.api.nvim_buf_set_lines(self.p.buf, i - 1, i - 1, false, { item.line })
-			end
-			if self.p.win then
-				vim.api.nvim_win_set_cursor(self.p.win, { 1, 0 })
-			end
-			self.next_line = 2
-		end,
-	})
+	core:subscribe(vim.schedule_wrap(function(key)
+		self:update(key, core.state[key])
+	end))
+end
 
-	core:observe("playing_time", {
-		playing_time = function(time)
-			if #self.times <= self.next_line then
-				return
-			end
-			local win = nil
-			while time >= self.times[self.next_line] and self.next_line < #self.times do
-				self.next_line = self.next_line + 1
-				win = self.p.win
-			end
-			if win then
-				vim.api.nvim_win_call(win, function()
-					local h = vim.api.nvim_win_get_height(0)
-					local dist = math.floor(h / 2)
-					self.em = vim.api.nvim_buf_set_extmark(self.p.buf, self.ns_id, self.next_line - 2, 0, {
-						hl_group = "Visual",
-						end_line = self.next_line - 1,
-						end_col = 0,
-						priority = 100,
-						id = self.em,
-					})
-					local view = vim.fn.winsaveview()
-					view.topline = math.max(1, self.next_line - dist - 1)
-					vim.fn.winrestview(view)
-				end)
-			end
-		end,
-	})
+function M:update(prop, v)
+	if not v then
+		return
+	end
+	if prop == "playing" then
+		self.times = {}
+		vim.api.nvim_buf_set_lines(self.p.buf, 0, -1, false, {})
+		for i, item in pairs(v.lyric) do
+			table.insert(self.times, #self.times + 1, item.time)
+			vim.api.nvim_buf_set_lines(self.p.buf, i - 1, i - 1, false, { item.line })
+		end
+		if self.p.win then
+			vim.api.nvim_win_set_cursor(self.p.win, { 1, 0 })
+		end
+		self.next_line = 2
+	elseif prop == "playing_time" then
+		if #self.times <= self.next_line then
+			return
+		end
+		local win = nil
+		while v >= self.times[self.next_line] and self.next_line < #self.times do
+			self.next_line = self.next_line + 1
+			win = self.p.win
+		end
+		if win then
+			vim.api.nvim_win_call(win, function()
+				local h = vim.api.nvim_win_get_height(0)
+				local dist = math.floor(h / 2)
+				self.em = vim.api.nvim_buf_set_extmark(self.p.buf, self.ns_id, self.next_line - 2, 0, {
+					hl_group = "Visual",
+					end_line = self.next_line - 1,
+					end_col = 0,
+					priority = 100,
+					id = self.em,
+				})
+				local view = vim.fn.winsaveview()
+				view.topline = math.max(1, self.next_line - dist - 1)
+				vim.fn.winrestview(view)
+			end)
+		end
+	end
 end
 
 return M

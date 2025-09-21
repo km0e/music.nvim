@@ -1,136 +1,102 @@
----@class music.song.meta
----@field id string
----@field title string
----@field artist string
----@field album string
----
----@alias music.observer.playing fun(id: string)
----
----@alias music.core.observer.playlist fun(list: music.song.meta[])
----
----@alias music.observer.pause fun(pause: boolean)
----
----@alias music.observer.playing_time fun(seconds: number)
----
----@alias music.observer.total_time fun(seconds: number)
----
----@alias music.observer.mode fun(mode: string)
----
----@alias music.observer.field "playing"|"playlist"|"pause"|"playing_time"|"total_time"|"mode"
----
----@class music.core.observer
----@field playing? music.observer.playing
----@field playlist? music.core.observer.playlist
----@field pause? music.observer.pause
----@field playing_time? music.observer.playing_time
----@field total_time? music.observer.total_time
----@field mode? music.observer.mode
----
----@class music.lyric_item
----@field time number
----@field line string
-
----@alias music.lyric music.lyric_item[]
-
----
----@class music.core
----@field observe fun(self, name: music.observer.field, observer: music.core.observer)
----@field setup fun(self)
----@field lazy_setup fun(self)
----@field load fun(id: string, opts?: {append: boolean,play: boolean})
----@field toggle fun(self)
----@field mode fun(self, mode: string)
----@field next fun(self)
----@field prev fun(self)
-local M = {}
----@type music.backend
-local b = require("music.backend")
-local u = require("music.util")
-local su = require("snacks.util")
-local uv = vim.uv
-
----@type music.source
+local a = require("plenary.async")
 local src = require("music.source")
 
-local observers = {}
-function M:observe(name, observer)
-	local fn = observers[name]
-	if not fn then
-		observers[name] = observer[name]
-	else
-		observers[name] = function(...)
-			observer[name](...)
-			fn(...)
-		end
-	end
-end
+---@class music.core.state
+---@field playing? music.song -- currently playing song
+---@field pause boolean -- is paused
+---@field playing_time number -- current playing time in seconds
+---@field total_time number -- total time of the current song in seconds
+---@field mode string -- playback mode: "pl" (playlist), "loop" (single loop), "pl_loop" (playlist loop)
+---@field playlist music.song[] -- current playlist
+---
+---@class music.core.api:music.core.state
+---@field playing string -- currently playing song id
+---@field playlist string[] -- current playlist
+---
+---@class music.backend
+---@field toggle fun(self: music.backend)
+---@field load fun(self: music.backend, url: string, opts?: {append: boolean,play: boolean})
+---@field refresh fun(self: music.backend)
+---@field next fun(self: music.backend)
+---@field prev fun(self: music.backend)
+---@field quit fun(self: music.backend)
+---@field mode fun(self: music.backend, mode: "pl"|"loop"|"pl_loop")
+---
+---
+---@class music.core.config
+---@field backends table<string, music.mpv.config>
+---@field default_backend string
+---
+---@class music.core:music.backend
+---@field setup fun(self: music.core, opts: music.core.config)
+---@field opts music.core.config
+---@field backends table<string, music.backend>
+---@field current_backend? music.backend
+---@field state music.core.state
+---@field setter table -- used to get state changes by __newindex metamethod, recommended to wrap with setmetatable
+---@field subscribe fun(self: music.core, callback: fun(key: string))
+local M = {
+	backends = {},
+	current_backend = nil,
+	state = {
+		playing = nil,
+		playlist = {},
+		playing_time = 0.00,
+		total_time = 1.00,
+		pause = false,
+		mode = "pl",
+	},
+	setter = {},
+}
 
-function M:setup()
-	b:observe("playing", {
-		playing = vim.schedule_wrap(function(id)
-			observers.playing("subsonic:" .. id) --FIX: This assumes 'subsonic' as the source.
-		end),
-	})
-	b:observe("playlist", {
-		playlist = vim.schedule_wrap(function(list)
-			---@type music.song.meta[]
-			local pl = {}
-			for i, song_id in ipairs(list) do
-				pl[i] = src:get("subsonic:" .. song_id) --FIX: This assumes 'subsonic' as the source.
-			end
-			observers.playlist(pl)
-		end),
-	})
-	local observe = function(name)
-		b:observe(name, {
-			[name] = vim.schedule_wrap(function(...)
-				local fn = observers[name]
-				if fn then
-					fn(...)
+---@param opts music.core.config
+function M:setup(opts)
+	setmetatable(self.setter, {
+		__index = self.state,
+		__newindex = function(_, k, v)
+			if k == "playing" then
+				v = src.su2s[v]
+			elseif k == "playlist" then
+				for i, url in ipairs(v) do
+					v[i] = src.su2s[url]
 				end
-			end),
-		})
-	end
-	observe("pause")
-	observe("playing_time")
-	observe("total_time")
-	observe("mode")
-	uv.new_timer():start(1000, 100, function()
-		b:trigger("playing_time")
-	end)
-
-	local augid = vim.api.nvim_create_augroup("PluginMusic", { clear = false })
-	vim.api.nvim_create_autocmd("VimLeavePre", {
-		group = augid,
-		callback = function()
-			b:quit()
+			end
+			if not v then
+				return
+			end
+			self.state[k] = v
 		end,
 	})
+
+	self.opts = opts or {
+		backends = {
+			mpv = {},
+		},
+		default_backend = "mpv",
+	}
 end
 
-function M:lazy_setup()
-	b:lazy_setup()
-	b:trigger("playing", "playlist", "pause", "playing_time", "total_time")
-end
+M.refresh = a.void(function(self)
+	if not self.current_backend then
+		self.current_backend = self.backends[self.opts.default_backend]
+		if not self.current_backend then
+			local b = require("music.backend.mpv"):new(self.setter, self.opts.backends[self.opts.default_backend])
+			self.current_backend = b
+			self.backends[self.opts.default_backend] = b
+		end
+		setmetatable(self, { __index = self.current_backend })
+	end
+	self.current_backend:refresh()
+end)
 
-function M.load(id, opts)
-	b:load(src:stream(id), opts)
-end
-
-function M:toggle()
-	b:toggle()
-end
-
-function M:next()
-	b:next()
-end
-
-function M:prev()
-	b:prev()
-end
-
-function M:mode(mode)
-	b:mode(mode)
+function M:subscribe(callback)
+	local old = getmetatable(self.setter).__newindex
+	setmetatable(self.setter, {
+		__newindex = function(_, k, v)
+			old(_, k, v)
+			callback(k)
+		end,
+	})
 end
 
 return M

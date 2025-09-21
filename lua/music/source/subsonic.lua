@@ -1,35 +1,40 @@
----@type music._source
----@diagnostic disable-next-line: missing-fields
-local M = {
-	url = nil,
-	q = {
-		f = "json",
-		c = "km0e/music.nvim",
-		v = "1.12.0",
-	},
-}
-
 local u = require("music.util")
+local su = require("snacks.util")
+---@class music.source.subsonic.song.meta
+---@field id string
+---@field title string
+---@field artist string
+---@field album string
+---
+---@class music.source.subsonic.lyric_item
+---@field start number
+---@field value string
 
----@class music.source.subsonic.config
----@field url string
----@field u string
----@field v string
----@field p string|nil
----@field t string|nil
----@field s string|nil
+---@alias music.subsonic.lyric music.source.subsonic.lyric_item[]
+---
+---@class music.src:music.subsonic.config
+---@diagnostic disable-next-line: missing-fields
+local M = {}
+M.__index = M
 
----@param opts table<string, music.source.subsonic.config>|music.source.subsonic.config
-function M:setup(opts)
-	opts = opts or {}
-	if not u.field_check("subsonic api", opts, "url", "u") then
-		return
+---@param opts music.subsonic.config
+---@return (fun(opts: snacks.picker.Config, ctx: snacks.picker.finder.ctx): snacks.picker.finder.Item[])|nil
+function M:new(opts)
+	if not u.field_check("subsonic api", opts, "url", { "q", "u" }) then
+		return nil
 	end
-	M.q = vim.tbl_deep_extend("force", M.q, opts)
-	local q = M.q
+	local src = vim.tbl_deep_extend("force", {
+		url = nil, -- Base URL of the Subsonic server
+		q = {
+			f = "json", -- Response format
+			c = "km0e/music.nvim", -- Client name
+			v = "1.16.0", -- API version
+		},
+	}, opts)
+	src = setmetatable(src, self)
+	local q = src.q
 
-	M.url = q.url .. "/rest/"
-	q.url = nil
+	src.url = src.url .. "/rest/"
 	if q.t and q.s then
 		q.p = nil
 	elseif q.p then
@@ -38,17 +43,20 @@ function M:setup(opts)
 		q.s = nil
 	else
 		vim.notify("No password or token provided, authentication failed", vim.log.levels.WARN)
-		M.url = nil
+		src.url = nil
+	end
+	return function(_, ctx)
+		return src:search(ctx)
 	end
 end
 
 ---@param endpoint string
 ---@param q table
 ---@return table|nil
-local function query(endpoint, q)
+function M:query(endpoint, q)
 	local curl = require("plenary.curl")
-	local url = M.url .. endpoint .. ".view"
-	q = vim.tbl_deep_extend("force", M.q, q)
+	local url = self.url .. endpoint .. ".view"
+	q = vim.tbl_deep_extend("force", self.q, q)
 	local response = curl.get(url, { query = q })
 	if response.status ~= 200 then
 		vim.notify("Failed to query " .. endpoint .. ": " .. response.status, vim.log.levels.ERROR)
@@ -79,32 +87,70 @@ local function extract_song(song)
 	}
 end
 
----@param name string
----@param offset number
----@param count number
----@return music.song.meta[]|nil
-function M:search(name, offset, count)
-	local resp = query("search3", {
-		query = name,
-		songOffset = offset,
-		songCount = count,
+function M:lyric(id)
+	local resp = self:query("getLyricsBySongId", { id = id })
+	if
+		not resp
+		or not u.field_check("subsonic getLyrics with " .. id, resp, "lyricsList")
+		or not resp.lyricsList.structuredLyrics
+	then
+		return {}
+	end
+	local all_lyrics = resp.lyricsList.structuredLyrics
+	if #all_lyrics == 0 then
+		return {}
+	end
+	---@type music.subsonic.lyric
+	local slyrics = all_lyrics[1].line or {}
+	---@type music.lyric
+	local lyrics = {}
+	for i, line in ipairs(slyrics) do
+		lyrics[i] = { time = line.start / 1000, line = line.value }
+	end
+	return lyrics
+end
+
+---@class music.src.title_cache
+---@field [string] snacks.picker.finder.Item[]
+local tcache = {}
+
+---
+---@param ctx snacks.picker.finder.ctx
+---@return snacks.picker.finder.result
+function M:_search(ctx)
+	local input = ctx.picker.input:get()
+	local resp = self:query("search3", {
+		query = input,
+		songOffset = 0,
+		songCount = 1024,
 		artistCount = 0,
 		albumCount = 0,
 	})
 	if not resp or not u.field_check("subsonic search3", resp, "searchResult3") then
-		return nil
+		return {}
 	end
+	---@type snacks.picker.finder.Item[]
 	local songs = {}
 	for i, s in ipairs(resp.searchResult3.song or {}) do
 		songs[i] = extract_song(s)
+		songs[i].stream_url = self:stream(s.id)
+		songs[i].lyric = self:lyric(s.id)
 	end
 	return songs
 end
 
+---@param ctx snacks.picker.finder.ctx
+---@return snacks.picker.finder.Item[]
+function M:search(ctx)
+	local input = ctx.picker.input:get()
+	tcache[input] = tcache[input] or self:_search(ctx)
+	return tcache[input]
+end
+
 ---@param id string
----@return music.song.meta|nil
+---@return music.source.subsonic.song.meta|nil
 function M:get(id)
-	local resp = query("getSong", { id = id })
+	local resp = self:query("getSong", { id = id })
 	if not resp or not u.field_check("subsonic getSong", resp, "song") then
 		return nil
 	end
@@ -119,25 +165,6 @@ function M:stream(id)
 		id = id,
 	})
 	return url .. "?" .. u.kv_to_str(q)
-end
-
-function M:lyric(id)
-	local resp = query("getLyricsBySongId", { id = id })
-	if not resp or not u.field_check("subsonic getLyrics", resp, { "lyricsList", "structuredLyrics" }) then
-		return {}
-	end
-	local all_lyrics = resp.lyricsList.structuredLyrics
-	if #all_lyrics == 0 then
-		return {}
-	end
-	---@type music.source.lyric
-	local slyrics = all_lyrics[1].line or {}
-	---@type music.lyric
-	local lyrics = {}
-	for i, line in ipairs(slyrics) do
-		lyrics[i] = { time = line.start / 1000, line = line.value }
-	end
-	return lyrics
 end
 
 return M
