@@ -104,7 +104,7 @@ Actions table:
 
 ### Showcase
 
-https://github.com/user-attachments/assets/7b3fa82e-1ff2-401c-9f0e-a59e0ec92635
+https://github.com/user-attachments/assets/f3bdb14f-ba1a-408c-bd60-934fa755da18
 
 ### Usage
 

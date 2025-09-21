@@ -27,7 +27,7 @@ local src = require("music.source")
 ---@field backends table<string, music.mpv.config>
 ---@field default_backend string
 ---
----@class music.core:music.backend
+---@class music.core
 ---@field setup fun(self: music.core, opts: music.core.config)
 ---@field opts music.core.config
 ---@field backends table<string, music.backend>
@@ -55,13 +55,19 @@ function M:setup(opts)
 		__index = self.state,
 		__newindex = function(_, k, v)
 			if k == "playing" then
-				v = src.su2s[v]
+				v = src.su2s[v] or src:parse(v, function(_v)
+					self.state[k] = _v
+				end)
 			elseif k == "playlist" then
+				local nv = {}
 				for i, url in ipairs(v) do
-					v[i] = src.su2s[url]
+					nv[i] = src.su2s[v] or src:parse(url, function(_v)
+						self.state.playlist[i] = _v
+					end)
 				end
+				v = nv
 			end
-			if not v then
+			if v == nil then
 				return
 			end
 			self.state[k] = v
@@ -84,16 +90,16 @@ M.refresh = a.void(function(self)
 			self.current_backend = b
 			self.backends[self.opts.default_backend] = b
 		end
-		setmetatable(self, { __index = self.current_backend })
 	end
 	self.current_backend:refresh()
 end)
 
 function M:subscribe(callback)
-	local old = getmetatable(self.setter).__newindex
+	local old = getmetatable(self.setter)
 	setmetatable(self.setter, {
+		__index = old.__index,
 		__newindex = function(_, k, v)
-			old(_, k, v)
+			old.__newindex(_, k, v)
 			callback(k)
 		end,
 	})

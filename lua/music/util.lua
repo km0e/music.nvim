@@ -71,10 +71,18 @@ function M.notify(msg, level)
 		notif.timeout = 20000 -- 5 seconds
 		return false
 	end
-	vim.notify(msg, level or vim.log.levels.INFO, {
-		--@type fun(notif: snacks.notifier.Notif): boolean
-		keep = keep,
-	})
+	vim.schedule(function()
+		vim.notify(msg, level or vim.log.levels.INFO, {
+			--@type fun(notif: snacks.notifier.Notif): boolean
+			keep = keep,
+		})
+	end)
+end
+
+function M.n(msg, level, opts)
+	vim.schedule(function()
+		vim.notify(msg, level or vim.log.levels.INFO, opts)
+	end)
 end
 
 return M

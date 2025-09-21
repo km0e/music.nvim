@@ -21,7 +21,7 @@ local actions = {
 	toggle = {
 		desc = "Play/Pause",
 		action = function()
-			core:toggle()
+			core.current_backend:toggle()
 		end,
 	},
 	append = {
@@ -30,7 +30,7 @@ local actions = {
 			local song = self:items()[vim.v.count1]
 			self.list:_move(vim.v.count1, true)
 			if song then
-				core:load(song.stream_url, {
+				core.current_backend:load(song.stream_url, {
 					append = #core.state.playlist > 0,
 					play = false,
 				})
@@ -43,7 +43,7 @@ local actions = {
 			local song = self:items()[vim.v.count1]
 			self.list:_move(vim.v.count1, true)
 			if song then
-				core:load(song.stream_url)
+				core.current_backend:load(song.stream_url)
 			end
 		end,
 	},
@@ -55,19 +55,19 @@ local actions = {
 				loop = "pl_loop",
 				pl_loop = "pl",
 			}
-			core:mode(modes[core.state.mode])
+			core.current_backend:mode(modes[core.state.mode])
 		end,
 	},
 	next = {
 		desc = "Next song",
 		action = function()
-			core:next()
+			core.current_backend:next()
 		end,
 	},
 	prev = {
 		desc = "Previous song",
 		action = function()
-			core:prev()
+			core.current_backend:prev()
 		end,
 	},
 }
@@ -95,9 +95,9 @@ function M:setup(opts)
 	}
 
 	local finder = {}
-	for i, s in ipairs(src.srcs) do
-		finder[i] = function(cfg, ctx)
-			local items = s(cfg, ctx)
+	for _, s in pairs(src.srcs) do
+		finder[#finder + 1] = function(_, ctx)
+			local items = s:find(ctx)
 			fmt:cache(items)
 			return items
 		end

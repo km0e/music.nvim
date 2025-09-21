@@ -1,5 +1,4 @@
 local u = require("music.util")
-local su = require("snacks.util")
 ---@class music.source.subsonic.song.meta
 ---@field id string
 ---@field title string
@@ -12,26 +11,30 @@ local su = require("snacks.util")
 
 ---@alias music.subsonic.lyric music.source.subsonic.lyric_item[]
 ---
----@class music.src:music.subsonic.config
+---@class music._source:music.subsonic.config
 ---@diagnostic disable-next-line: missing-fields
 local M = {}
-M.__index = M
+
+---@param meta table
+function M:setup(meta)
+	setmetatable(self, { __index = meta })
+end
 
 ---@param opts music.subsonic.config
----@return (fun(opts: snacks.picker.Config, ctx: snacks.picker.finder.ctx): snacks.picker.finder.Item[])|nil
+---@return music._source|nil
 function M:new(opts)
 	if not u.field_check("subsonic api", opts, "url", { "q", "u" }) then
 		return nil
 	end
 	local src = vim.tbl_deep_extend("force", {
-		url = nil, -- Base URL of the Subsonic server
+		url = nil,            -- Base URL of the Subsonic server
 		q = {
-			f = "json", -- Response format
+			f = "json",         -- Response format
 			c = "km0e/music.nvim", -- Client name
-			v = "1.16.0", -- API version
+			v = "1.16.0",       -- API version
 		},
 	}, opts)
-	src = setmetatable(src, self)
+	src = setmetatable(src, { __index = self })
 	local q = src.q
 
 	src.url = src.url .. "/rest/"
@@ -45,9 +48,7 @@ function M:new(opts)
 		vim.notify("No password or token provided, authentication failed", vim.log.levels.WARN)
 		src.url = nil
 	end
-	return function(_, ctx)
-		return src:search(ctx)
-	end
+	return src
 end
 
 ---@param endpoint string
@@ -78,6 +79,7 @@ function M:query(endpoint, q)
 	return resp
 end
 
+---@param song music.source.subsonic.song.meta
 local function extract_song(song)
 	return {
 		id = song.id,
@@ -90,9 +92,9 @@ end
 function M:lyric(id)
 	local resp = self:query("getLyricsBySongId", { id = id })
 	if
-		not resp
-		or not u.field_check("subsonic getLyrics with " .. id, resp, "lyricsList")
-		or not resp.lyricsList.structuredLyrics
+			not resp
+			or not u.field_check("subsonic getLyrics with " .. id, resp, "lyricsList")
+			or not resp.lyricsList.structuredLyrics
 	then
 		return {}
 	end
@@ -147,14 +149,18 @@ function M:search(ctx)
 	return tcache[input]
 end
 
----@param id string
----@return music.source.subsonic.song.meta|nil
-function M:get(id)
+---@param url string
+---@return music.song|nil
+function M:get(url)
+	local id = url:match("[?&]id=([^&]+)")
 	local resp = self:query("getSong", { id = id })
 	if not resp or not u.field_check("subsonic getSong", resp, "song") then
 		return nil
 	end
-	return extract_song(resp.song)
+	local song = extract_song(resp.song)
+	song.stream_url = url
+	song.lyric = self:lyric(resp.song.id)
+	return song
 end
 
 ---@param id string
@@ -163,6 +169,7 @@ function M:stream(id)
 	local url = self.url .. "stream.view"
 	local q = vim.tbl_deep_extend("force", self.q, {
 		id = id,
+		sid = self.id,
 	})
 	return url .. "?" .. u.kv_to_str(q)
 end

@@ -15,6 +15,7 @@
 ---@field data any
 ---@field id integer
 ---@field name string
+---@field reason? string
 
 local uv = vim.uv
 local a = require("plenary.async")
@@ -52,7 +53,7 @@ end
 ---@field ["loop-playlist"] fun(self: music.backend.mpv, data: boolean|string|number)
 
 ---@class music.backend.mpv:music.backend
----@field job Job | nil
+---@field job Job | nil | music.backend.mpv.state | {time-pos: number, pause: boolean}
 ---@field skt uv.uv_pipe_t | nil
 ---@field rid integer request ID counter, must starts from 1
 ---@field rcbs table<number, fun(response: { error: string, data: any, request_id: number })> callbacks for requests
@@ -68,16 +69,16 @@ M.__index = M
 
 M.raw = {
 	playlist = function(self, data)
-		local lp = nil
-		local playlist = {}
+		self.s.playing = ""
+		self.s.playlist = {}
 		for i, item in ipairs(data) do
 			if item.playing then
-				lp = item.filename
+				self.s.playing = item.filename
 			end
-			playlist[i] = item.filename
+			self.s.playlist[i] = item.filename
 		end
-		self.api.playlist = playlist
-		self.api.playing = lp or ""
+		self.api.playlist = self.s.playlist
+		self.api.playing = self.s.playing
 	end,
 	pause = function(self, pause)
 		self.api.pause = pause or false
@@ -142,14 +143,20 @@ function M:_try_connect()
 			local cb = self.raw[e.name]
 			if not cb then
 				vim.notify("Received response for unknown observe ID: " .. e.id, vim.log.levels.WARN)
-			elseif e.data ~= nil then
+			else
 				cb(self, e.data)
 			end
+		elseif e.event == "end-file" and e.reason == "quit" and self.job == nil then
+			self.job = vim.deepcopy(self.s)
+			self.job["time-pos"] = self.api.playing_time
+			self.job.pause = self.api.pause
+		elseif e.event and self.raw[e.event] then
+			self.raw[e.event](self, e.data)
 		end
 	end
 	local function handle_response(err, chunk)
 		if err then
-			vim.notify("Error reading from MPV socket: " .. err, vim.log.levels.ERROR)
+			u.n("Error reading from MPV socket: " .. err, vim.log.levels.ERROR)
 			return
 		end
 		buffer = buffer .. (chunk or "")
@@ -176,7 +183,6 @@ function M:_try_connect()
 	end
 end
 
----@return nil
 function M:_start_new()
 	local job = require("plenary.job"):new({
 		command = "mpv",
@@ -198,9 +204,9 @@ function M:_start_new()
 	local err = self:_try_connect()
 	if err then
 		vim.notify("Failed to connect to MPV server: " .. err, vim.log.levels.ERROR)
-		return nil
+		return
 	end
-	return true
+	u.n("Started new MPV server", vim.log.levels.INFO)
 end
 
 function M:_start()
@@ -208,41 +214,36 @@ function M:_start()
 	if not err then
 		err = self:_try_connect()
 		if not err then
-			return false
+			u.n("Connected to existing MPV server", vim.log.levels.INFO)
+			return
 		end
 		err = a.uv.fs_unlink(self.opts.path)
 		if err then
 			vim.notify("Failed to unlink existing MPV socket: " .. err, vim.log.levels.ERROR)
-			return nil
+			return
 		end
-		vim.schedule(function()
-			vim.notify("Unlinked stale MPV socket", vim.log.levels.INFO)
-		end)
+		u.n("Unlinked stale MPV socket", vim.log.levels.INFO)
 	elseif not err:match("ENOENT") then
 		vim.notify("Failed to stat MPV socket: " .. err, vim.log.levels.ERROR)
-		return nil
+		return
 	end
-	return self:_start_new()
+	self:_start_new()
 end
 
 function M:start()
-	local res = self:_start()
-	if res == nil then
+	self:_start()
+	if not self.skt then
 		return false
 	end
-	vim.schedule(function()
-		if res then
-			vim.notify("Started new MPV server", vim.log.levels.INFO)
-		else
-			vim.notify("Connected to existing MPV server", vim.log.levels.INFO)
-		end
-	end)
 end
 
 ---@param cmd table|string
 ---@param cb? fun(response: music.backend.mpv.response)
 ---@return nil
 function M:req(cmd, cb)
+	if not self.skt then
+		return
+	end
 	if type(cmd) == "string" then
 		cmd = { cmd }
 	end
@@ -259,7 +260,7 @@ function M:req(cmd, cb)
 				return
 			end
 			if response.error ~= "success" then
-				vim.notify(
+				u.notify(
 					"MPV command " .. vim.inspect(cmd) .. " failed: " .. vim.inspect(response),
 					vim.log.levels.ERROR
 				)
@@ -267,10 +268,37 @@ function M:req(cmd, cb)
 		end
 	self.skt:write(j .. "\n", function(err)
 		if err then
-			vim.notify("Error sending command to MPV: " .. err, vim.log.levels.ERROR)
-			self.rcbs[self.rid] = nil
+			u.n("Error sending command to MPV: " .. err, vim.log.levels.ERROR)
 			self.skt:close()
 			self.skt = nil
+			a.void(function()
+				local r = self.job
+				if not r then
+					return
+				end
+				self:_start()
+				for _, item in ipairs(r.playlist) do
+					if item == r.playing then
+						local cmd = {
+							"loadfile",
+							item,
+							"append-play",
+						}
+						self.raw["playback-restart"] = function(self)
+							self:req({ "set_property", "time-pos", r["time-pos"] })
+							self:req({ "set_property", "pause", r.pause })
+							self.raw["playback-restart"] = nil
+						end
+						self:req(cmd)
+						-- u.n("Command sent to MPV: " .. vim.inspect(cmd), vim.log.levels.DEBUG)
+						-- uv.sleep(100) -- Give MPV some time to load the file
+						-- self:req({ "set_property", "time-pos", r["time-pos"] })
+						-- self:req({ "set_property", "pause", r.pause })
+					else
+						self:req({ "loadfile", item, "append" })
+					end
+				end
+			end)()
 		end
 	end)
 end
@@ -401,7 +429,7 @@ function M:quit()
 		return
 	end
 	self:req("quit")
-	self.job = nil
+	self.job = {}
 	if self.skt then
 		self.skt:close()
 		self.skt = nil
